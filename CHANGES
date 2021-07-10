@@ -165,6 +165,9 @@ Changes with Apache 2.4.47
        mandated by various WebDAV extensions.
      [Graham Leggett]
 
+  *) mod_proxy: Correctly consider error response codes by the backend when
+     processing failonstatus. PR 59869 [Ruediger Pluem]
+
   *) mod_proxy_http: Fix a possibly crash when the origin connection gets
      interrupted before completion.  PR 64234.
      [Barnim Dzwillo <dzwillo strato.de>, Ruediger Pluem]

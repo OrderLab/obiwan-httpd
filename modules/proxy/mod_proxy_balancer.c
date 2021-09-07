@@ -25,6 +25,14 @@
 #include "util_md5.h"
 #include "mod_watchdog.h"
 
+#include "orbit.h"
+
+#if 0
+#define obprint(format, ...) fprintf(stderr, format, ##__VA_ARGS__)
+#else
+#define obprint(format, ...) do {} while (0)
+#endif
+
 static const char *balancer_mutex_type = "proxy-balancer-shm";
 ap_slotmem_provider_t *storage = NULL;
 
@@ -169,7 +177,9 @@ static char *get_path_param(apr_pool_t *pool, char *url,
             ++path;
             if (*path) {
                 char *q;
-                path = apr_strtok(apr_pstrdup(pool, path), pathdelims, &q);
+                // path = apr_strtok(apr_pstrdup(pool, path), pathdelims, &q);
+                // FIXME: fix this memleak
+                path = apr_strtok(strdup(path), pathdelims, &q);
                 return path;
             }
         }
@@ -198,7 +208,7 @@ static char *get_cookie_param(request_rec *r, const char *name)
                      * Session cookie was found, get its value
                      */
                     char *end_cookie, *cookie;
-                    cookie = apr_pstrdup(r->pool, start_cookie);
+                    cookie = strdup(start_cookie);
                     if ((end_cookie = strchr(cookie, ';')) != NULL)
                         *end_cookie = '\0';
                     if((end_cookie = strchr(cookie, ',')) != NULL)
@@ -210,6 +220,9 @@ static char *get_cookie_param(request_rec *r, const char *name)
     }
     return NULL;
 }
+
+// #undef ap_log_rerror
+// #define ap_log_rerror(...) do {} while (0)
 
 /* Find the worker that has the 'route' defined
  */
@@ -224,15 +237,21 @@ static proxy_worker *find_route_worker(proxy_balancer *balancer,
 
     checking_standby = checked_standby = 0;
     while (!checked_standby) {
+        obprint("route_worker alive 1\n");
         workers = (proxy_worker **)balancer->workers->elts;
         for (i = 0; i < balancer->workers->nelts; i++, workers++) {
             proxy_worker *worker = *workers;
+            obprint("route_worker alive 2: loop\n");
             if ( (checking_standby ? !PROXY_WORKER_IS_STANDBY(worker) : PROXY_WORKER_IS_STANDBY(worker)) )
                 continue;
+            obprint("route_worker alive 3: (%s) (%s)\n", worker->s->route, route);
             if (*(worker->s->route) && strcmp(worker->s->route, route) == 0) {
+                obprint("route_worker alive 4\n");
                 if (PROXY_WORKER_IS_USABLE(worker)) {
+                    obprint("route_worker alive 4.1\n");
                     return worker;
                 } else {
+                    obprint("route_worker alive 4.2\n");
                     /*
                      * If the worker is in error state run
                      * retry on that worker. It will be marked as
@@ -242,8 +261,10 @@ static proxy_worker *find_route_worker(proxy_balancer *balancer,
                      */
                     ap_proxy_retry_worker_fn("BALANCER", worker, r->server);
                     if (PROXY_WORKER_IS_USABLE(worker)) {
+                        obprint("route_worker alive 4.2.1\n");
                             return worker;
                     } else {
+                        obprint("route_worker alive 4.2.2\n");
                         /*
                          * We have a worker that is unusable.
                          * It can be in error or disabled, but in case
@@ -253,6 +274,7 @@ static proxy_worker *find_route_worker(proxy_balancer *balancer,
                          * session replication between those two remote.
                          */
                         if (*worker->s->redirect) {
+                            obprint("route_worker alive 4.2.3: redirect\n");
                             proxy_worker *rworker = NULL;
                             rworker = find_route_worker(balancer, worker->s->redirect, r);
                             /* Check if the redirect worker is usable */
@@ -278,25 +300,42 @@ static proxy_worker *find_route_worker(proxy_balancer *balancer,
     return NULL;
 }
 
+/* TODO: change to use arg struct */
+unsigned long apr_table_setn_orbit(size_t nargs, unsigned long args[])
+{
+    // assert(nargs == 3);
+    apr_table_setn((apr_table_t *)args[0], (const char *)args[1], (const char *)args[2]);
+    return 0;
+}
+
 static proxy_worker *find_session_route(proxy_balancer *balancer,
                                         request_rec *r,
                                         char **route,
                                         const char **sticky_used,
-                                        char **url)
+                                        char **url, struct orbit_scratch *s)
 {
     proxy_worker *worker = NULL;
 
+    obprint("session_route alive 1\n");
+    obprint("balancer = %p\n", balancer);
+    obprint("balancer->s = %p\n", balancer->s);
+    obprint("balancer->s->sticky = %p\n", balancer->s->sticky);
     if (!*balancer->s->sticky)
         return NULL;
     /* Try to find the sticky route inside url */
+    obprint("session_route alive 2\n");
     *route = get_path_param(r->pool, *url, balancer->s->sticky_path, balancer->s->scolonsep);
+    obprint("session_route alive 3\n");
     if (*route) {
+        obprint("session_route alive 3.1\n");
         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, APLOGNO(01159)
                      "Found value %s for stickysession %s",
                      *route, balancer->s->sticky_path);
         *sticky_used =  balancer->s->sticky_path;
     }
     else {
+        obprint("session_route alive 3.2\n");
+        // FIXME: strdup needs to be freed
         *route = get_cookie_param(r, balancer->s->sticky);
         if (*route) {
             *sticky_used =  balancer->s->sticky;
@@ -305,6 +344,7 @@ static proxy_worker *find_session_route(proxy_balancer *balancer,
                          *route, balancer->s->sticky);
         }
     }
+    obprint("session_route alive 4\n");
     /*
      * If we found a value for stickysession, find the first '.' (or whatever
      * sticky_separator is set to) within. Everything after '.' (if present)
@@ -313,17 +353,29 @@ static proxy_worker *find_session_route(proxy_balancer *balancer,
     if ((*route) && (balancer->s->sticky_separator != 0) && ((*route = strchr(*route, balancer->s->sticky_separator)) != NULL ))
         (*route)++;
     if ((*route) && (**route)) {
+        obprint("session_route alive 5\n");
         ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, APLOGNO(01161) "Found route %s", *route);
         /* We have a route in path or in cookie
          * Find the worker that has this route defined.
          */
         worker = find_route_worker(balancer, *route, r);
+        obprint("session_route alive 6\n");
+        obprint("session_route alive 6: worker = %p\n", worker);
+        obprint("session_route alive 6: worker->s = %p\n", worker ? worker->s : NULL);
+        obprint("session_route alive 6: route = %p\n", *route);
         if (worker && strcmp(*route, worker->s->route)) {
+            obprint("session_route alive 6.1\n");
             /*
              * Notice that the route of the worker chosen is different from
              * the route supplied by the client.
              */
+// #define apr_table_setn(...) do {} while (0)
+#define apr_table_setn(t, key, val) do { \
+        unsigned long args[] = { (unsigned long)(t), (unsigned long)(key), (unsigned long)(val) }; \
+        orbit_scratch_push_operation(s, apr_table_setn_orbit, 3, args); \
+    } while (0)
             apr_table_setn(r->subprocess_env, "BALANCER_ROUTE_CHANGED", "1");
+#undef apr_table_setn
             ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, APLOGNO(01162)
                           "Route changed from %s to %s",
                           *route, worker->s->route);
@@ -341,12 +393,12 @@ static proxy_worker *find_best_worker(proxy_balancer *balancer,
     apr_status_t rv;
 
 #if APR_HAS_THREADS
-    if ((rv = PROXY_THREAD_LOCK(balancer)) != APR_SUCCESS) {
+    /* if ((rv = PROXY_THREAD_LOCK(balancer)) != APR_SUCCESS) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r, APLOGNO(01163)
                       "%s: Lock failed for find_best_worker()",
                       balancer->s->name);
         return NULL;
-    }
+    } */
 #endif
 
     candidate = (*balancer->lbmethod->finder)(balancer, r);
@@ -355,11 +407,11 @@ static proxy_worker *find_best_worker(proxy_balancer *balancer,
         candidate->s->elected++;
 
 #if APR_HAS_THREADS
-    if ((rv = PROXY_THREAD_UNLOCK(balancer)) != APR_SUCCESS) {
+    /* if ((rv = PROXY_THREAD_UNLOCK(balancer)) != APR_SUCCESS) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r, APLOGNO(01164)
                       "%s: Unlock failed for find_best_worker()",
                       balancer->s->name);
-    }
+    } */
 #endif
 
     if (candidate == NULL) {
@@ -399,11 +451,14 @@ static proxy_worker *find_best_worker(proxy_balancer *balancer,
 
 }
 
+extern struct orbit_pool *scratch_pool;
+
 static int rewrite_url(request_rec *r, proxy_worker *worker,
-                        char **url)
+                        char **url, struct orbit_scratch *s)
 {
     const char *scheme = strstr(*url, "://");
     const char *path = NULL;
+    size_t name_len = 0, path_len = 0;
 
     if (scheme)
         path = ap_strchr_c(scheme + 3, '/');
@@ -415,7 +470,18 @@ static int rewrite_url(request_rec *r, proxy_worker *worker,
                              NULL));
     }
 
-    *url = apr_pstrcat(r->pool, worker->s->name, path, NULL);
+    //*url = apr_pstrcat(r->pool, worker->s->name, path, NULL);
+    name_len = worker->s->name ? strlen(worker->s->name) : 0;
+    path_len = path ? strlen(path) : 0;
+
+    int ret = orbit_scratch_push_any(s, NULL, name_len + path_len + 1);
+    obprint("ret = %d\n", ret);
+    // FIXME: this is ugly, we should return the repr directly
+    *url = ((struct orbit_repr*)s->ptr)->any.data;
+    obprint("url = %p, worker = %p\n", *url, worker);
+    if (name_len) memcpy(*url, worker->s->name, name_len);
+    if (path_len) memcpy(*url + name_len, path, path_len);
+    (*url)[name_len + path_len] = '\0';
 
     return OK;
 }
@@ -466,10 +532,20 @@ static apr_status_t decrement_busy_count(void *worker_)
     return APR_SUCCESS;
 }
 
-static int proxy_balancer_pre_request(proxy_worker **worker,
+unsigned long apr_pool_cleanup_register_orbit(size_t nargs, unsigned long args[])
+{
+    // assert(args == 4);
+    apr_pool_cleanup_register((apr_pool_t *)args[0], (const void *)args[1],
+                      (apr_status_t (*)(void *data))args[2],
+                      (apr_status_t (*)(void *data))args[3]);
+    return 0;
+}
+
+static int proxy_balancer_pre_request_inner(proxy_worker **worker,
                                       proxy_balancer **balancer,
                                       request_rec *r,
-                                      proxy_server_conf *conf, char **url)
+                                      proxy_server_conf *conf, char **url,
+                                      struct orbit_scratch *s)
 {
     int access_status;
     proxy_worker *runtime;
@@ -478,6 +554,7 @@ static int proxy_balancer_pre_request(proxy_worker **worker,
     apr_status_t rv;
 
     *worker = NULL;
+    obprint("pre_request alive 1\n");
     /* Step 1: check if the url is for us
      * The url we can handle starts with 'balancer://'
      * If balancer is already provided skip the search
@@ -486,28 +563,34 @@ static int proxy_balancer_pre_request(proxy_worker **worker,
     if (!*balancer &&
         !(*balancer = ap_proxy_get_balancer(r->pool, conf, *url, 1)))
         return DECLINED;
+    obprint("pre_request alive 2\n");
 
     /* Step 2: Lock the LoadBalancer
      * XXX: perhaps we need the process lock here
      */
 #if APR_HAS_THREADS
-    if ((rv = PROXY_THREAD_LOCK(*balancer)) != APR_SUCCESS) {
+    /* FIXME: do we need lock in orbit? */
+    /* if ((rv = PROXY_THREAD_LOCK(*balancer)) != APR_SUCCESS) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r, APLOGNO(01166)
                       "%s: Lock failed for pre_request", (*balancer)->s->name);
         return DECLINED;
-    }
+    } */
 #endif
 
     /* Step 3: force recovery */
-    force_recovery(*balancer, r->server);
+    // force_recovery(*balancer, r->server);
+    obprint("pre_request alive 3\n");
 
     /* Step 3.5: Update member list for the balancer */
     /* TODO: Implement as provider! */
-    ap_proxy_sync_balancer(*balancer, r->server, conf);
+    // FIXME: port this to orbit
+    // ap_proxy_sync_balancer(*balancer, r->server, conf);
 
     /* Step 4: find the session route */
-    runtime = find_session_route(*balancer, r, &route, &sticky, url);
+    runtime = find_session_route(*balancer, r, &route, &sticky, url, s);
+    obprint("pre_request alive 4\n");
     if (runtime) {
+        obprint("pre_request alive 4.1\n");
         if ((*balancer)->lbmethod && (*balancer)->lbmethod->updatelbstatus) {
             /* Call the LB implementation */
             (*balancer)->lbmethod->updatelbstatus(*balancer, runtime, r->server);
@@ -538,6 +621,7 @@ static int proxy_balancer_pre_request(proxy_worker **worker,
         *worker = runtime;
     }
     else if (route && (*balancer)->s->sticky_force) {
+        obprint("pre_request alive 4.2\n");
         int i, member_of = 0;
         proxy_worker **workers;
         /*
@@ -558,23 +642,30 @@ static int proxy_balancer_pre_request(proxy_worker **worker,
                           "%s: All workers are in error state for route (%s)",
                           (*balancer)->s->name, route);
 #if APR_HAS_THREADS
-            if ((rv = PROXY_THREAD_UNLOCK(*balancer)) != APR_SUCCESS) {
+            /* FIXME: do we need lock in orbit? */
+            /* if ((rv = PROXY_THREAD_UNLOCK(*balancer)) != APR_SUCCESS) {
                 ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r, APLOGNO(01168)
                               "%s: Unlock failed for pre_request",
                               (*balancer)->s->name);
-            }
+            } */
 #endif
             return HTTP_SERVICE_UNAVAILABLE;
         }
     }
 
 #if APR_HAS_THREADS
-    if ((rv = PROXY_THREAD_UNLOCK(*balancer)) != APR_SUCCESS) {
+    /* FIXME: do we need lock in orbit? */
+    /* if ((rv = PROXY_THREAD_UNLOCK(*balancer)) != APR_SUCCESS) {
         ap_log_rerror(APLOG_MARK, APLOG_ERR, rv, r, APLOGNO(01169)
                       "%s: Unlock failed for pre_request",
                       (*balancer)->s->name);
-    }
+    } */
 #endif
+#define apr_table_setn(t, key, val) do { \
+        unsigned long args[] = { (unsigned long)(t), (unsigned long)(key), (unsigned long)(val) }; \
+        orbit_scratch_push_operation(s, apr_table_setn_orbit, 3, args); \
+    } while (0)
+    obprint("pre_request alive 5\n");
     if (!*worker) {
         runtime = find_best_worker(*balancer, r);
         if (!runtime) {
@@ -604,9 +695,14 @@ static int proxy_balancer_pre_request(proxy_worker **worker,
         *worker = runtime;
     }
 
+    obprint("pre_request alive 6\n");
     (*worker)->s->busy++;
-    apr_pool_cleanup_register(r->pool, *worker, decrement_busy_count,
-                              apr_pool_cleanup_null);
+
+    /* apr_pool_cleanup_register(r->pool, *worker, decrement_busy_count,
+                              apr_pool_cleanup_null); */
+    unsigned long args[] = { (unsigned long)r->pool, (unsigned long)*worker,
+            (unsigned long)decrement_busy_count, (unsigned long)apr_pool_cleanup_null };
+    orbit_scratch_push_operation(s, apr_pool_cleanup_register_orbit, 4, args);
 
     /* Add balancer/worker info to env. */
     apr_table_setn(r->subprocess_env,
@@ -621,8 +717,11 @@ static int proxy_balancer_pre_request(proxy_worker **worker,
      * This replaces the balancers fictional name with the
      * real hostname of the elected worker.
      */
-    access_status = rewrite_url(r, *worker, url);
+    access_status = rewrite_url(r, *worker, url, s);
     /* Add the session route to request notes if present */
+#undef apr_table_setn
+// FIXME: we need to allocate route at some where and send it back
+#define apr_table_setn(...) do {} while (0)
     if (route) {
         apr_table_setn(r->notes, "session-sticky", sticky);
         apr_table_setn(r->notes, "session-route", route);
@@ -639,6 +738,107 @@ static int proxy_balancer_pre_request(proxy_worker **worker,
 
     return access_status;
 }
+#undef apr_table_setn
+
+struct ob_lb_args {
+    // proxy_worker **worker;
+    proxy_worker *worker;
+    // proxy_balancer **balancer;
+    proxy_balancer *balancer;
+    request_rec *r;
+    proxy_server_conf *conf;
+    // char **url;
+    char *url;
+};
+
+/* FIXME: arg passing and returns */
+static unsigned long proxy_balancer_pre_request_orbit(void *store, void *argptr)
+{
+    (void)store;
+    struct ob_lb_args *args =
+            *(struct ob_lb_args**)argptr;
+    struct orbit_scratch s;
+
+    int ret = orbit_scratch_create(&s);
+    obprint("ret = %d\n", ret);
+
+    ret = proxy_balancer_pre_request_inner(
+        &args->worker, &args->balancer, args->r, args->conf, &args->url, &s);
+    obprint("pre_request orbit ret = %d\n", ret);
+    obprint("pre_request orbit worker = %p\n", args->worker);
+    obprint("pre_request orbit balancer = %p\n", args->balancer);
+    obprint("pre_request orbit url = %p %s\n", args->url, args->url);
+    orbit_commit();
+    if (!orbit_scratch_empty(&s))
+        orbit_sendv(&s);
+    // FIXME: this won't work on 32-bit system
+    return (unsigned long)(unsigned int)ret;
+}
+
+extern struct orbit_pool *obpool;
+extern struct orbit_allocator *oballoc;
+
+static struct orbit_pool *to_pool(struct orbit_allocator *alloc)
+{
+    return (struct orbit_pool*)((char*)alloc->allocated - offsetof(struct orbit_allocator, allocated));
+}
+
+static int proxy_balancer_pre_request(proxy_worker **worker,
+                                      proxy_balancer **balancer,
+                                      request_rec *r,
+                                      proxy_server_conf *conf, char **url)
+{
+    int ret;
+    struct ob_lb_args *args;
+    struct orbit_task task;
+    union orbit_result result;
+    char *url_dup;
+
+    args = (struct ob_lb_args*)orbit_alloc(r->oballoc, sizeof(struct ob_lb_args));
+
+    url_dup = strcpy(orbit_alloc(r->oballoc, strlen(*url) + 1), *url);
+    *args = (struct ob_lb_args){ *worker, *balancer, r, conf, url_dup };
+
+    static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&m);
+
+    static struct orbit_module *ob = NULL;
+    static bool last_error = false;
+    if (!ob || last_error) ob = orbit_create("balancer", proxy_balancer_pre_request_orbit, NULL);
+
+    fprintf(stderr, "obpool size %lu\n", obpool->used);
+
+    struct orbit_pool *pools[] = { obpool, to_pool(r->oballoc), };
+    ret = orbit_call_async(ob, 0, 2, pools, NULL, &args, sizeof(args), &task);
+    while ((ret = orbit_recvv(&result, &task)) > 0) {
+        orbit_apply(&result.scratch, false);
+    }
+
+    obprint("pre_request ret = %d\n", ret);
+    obprint("pre_request worker = %p\n", args->worker);
+    obprint("pre_request balancer = %p\n", args->balancer);
+    obprint("pre_request url = %p %s\n", args->url, args->url);
+
+    if (ret < 0) {
+        ret = HTTP_SERVICE_UNAVAILABLE;
+        // FIXME: orbit_state derefs arbitrary pointer in kernel
+        // while (orbit_exists(ob)) ;{
+        last_error = true;
+        sleep(1);
+    } else {
+        *worker = args->worker;
+        *balancer = args->balancer;
+        if (args->url)
+            *url = apr_pstrdup(r->pool, args->url);
+        obprint("pre_request result.retval = %d\n", (int)result.retval);
+        ret = result.retval;
+        last_error = false;
+    }
+
+    pthread_mutex_unlock(&m);
+    return ret;
+}
+
 
 static int proxy_balancer_post_request(proxy_worker *worker,
                                        proxy_balancer *balancer,

@@ -64,6 +64,8 @@
 #include "ap_provider.h"
 #include "ap_slotmem.h"
 
+#include "orbit.h"
+
 #if APR_HAVE_NETINET_IN_H
 #include <netinet/in.h>
 #endif
@@ -157,6 +159,7 @@ typedef struct {
     const char *domain;     /* domain name to use in absence of a domain name in the request */
     const char *id;
     apr_pool_t *pool;       /* Pool used for allocating this struct's elements */
+    struct orbit_allocator *oballoc;
     int req;                /* true if proxy requests are enabled */
     int max_balancers;      /* maximum number of allowed balancers */
     int bgrowth;            /* number of post-config balancers can added */

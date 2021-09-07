@@ -41,6 +41,8 @@
 #include "util_ebcdic.h"
 #include "ap_mpm.h"
 
+#include "orbit.h"
+
 #if APR_HAVE_UNISTD_H
 #include <unistd.h>
 #endif
@@ -463,6 +465,9 @@ static void usage(process_rec *process)
     destroy_and_exit_process(process, 1);
 }
 
+struct orbit_pool *obpool, *scratchpool;
+struct orbit_allocator *oballoc;
+
 int main(int argc, const char * const argv[])
 {
     char c;
@@ -484,6 +489,11 @@ int main(int argc, const char * const argv[])
     int rc = OK;
 
     AP_MONCONTROL(0); /* turn off profiling of startup */
+
+    obpool = orbit_pool_create(1024 * 1024);
+    oballoc = orbit_allocator_from_pool(obpool, true);
+    scratchpool = orbit_pool_create(1024 * 1024);
+    orbit_scratch_set_pool(scratchpool);
 
     process = init_process(&argc, &argv);
     ap_pglobal = process->pool;

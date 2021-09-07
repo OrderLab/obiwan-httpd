@@ -52,6 +52,10 @@
 #include "util_varbuf.h"
 #include "mpm_common.h"
 
+#include "orbit.h"
+
+extern struct orbit_allocator *oballoc;
+
 #define APLOG_UNSET   (APLOG_NO_MODULE - 1)
 /* we know core's module_index is 0 */
 #undef APLOG_MODULE_INDEX
@@ -2085,7 +2089,8 @@ AP_CORE_DECLARE(const char *) ap_init_virtual_host(apr_pool_t *p,
                                                    server_rec *main_server,
                                                    server_rec **ps)
 {
-    server_rec *s = (server_rec *) apr_pcalloc(p, sizeof(server_rec));
+    // server_rec *s = (server_rec *) apr_pcalloc(p, sizeof(server_rec));
+    server_rec *s = (server_rec *) memset(orbit_alloc(oballoc, sizeof(server_rec)), 0, sizeof(server_rec));
 
     /* TODO: this crap belongs in http_core */
     s->process = main_server->process;
@@ -2217,7 +2222,8 @@ static void init_config_globals(apr_pool_t *p)
 static server_rec *init_server_config(process_rec *process, apr_pool_t *p)
 {
     apr_status_t rv;
-    server_rec *s = (server_rec *) apr_pcalloc(p, sizeof(server_rec));
+    // server_rec *s = (server_rec *) apr_pcalloc(p, sizeof(server_rec));
+    server_rec *s = (server_rec *) memset(orbit_alloc(oballoc, sizeof(server_rec)), 0, sizeof(server_rec));
 
     apr_file_open_stderr(&s->error_log, p);
     s->process = process;

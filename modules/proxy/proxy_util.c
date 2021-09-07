@@ -24,6 +24,8 @@
 #include "ajp.h"
 #include "scgi.h"
 
+#include "orbit.h"
+
 #include "mod_http2.h" /* for http2_get_num_workers() */
 
 #if APR_HAVE_UNISTD_H
@@ -1081,18 +1083,20 @@ PROXY_DECLARE(int) ap_proxy_valid_balancer_name(char *name, int i)
 }
 
 
+/* TODO: should we use libc alloc in orbit side? */
 PROXY_DECLARE(proxy_balancer *) ap_proxy_get_balancer(apr_pool_t *p,
                                                       proxy_server_conf *conf,
                                                       const char *url,
                                                       int care)
 {
     proxy_balancer *balancer;
-    char *c, *uri = apr_pstrdup(p, url);
+    char *c, *uri = strdup(url);
     int i;
     proxy_hashes hash;
 
     c = strchr(uri, ':');
     if (c == NULL || c[1] != '/' || c[2] != '/' || c[3] == '\0') {
+        free(uri);
         return NULL;
     }
     /* remove path from uri */
@@ -1106,11 +1110,13 @@ PROXY_DECLARE(proxy_balancer *) ap_proxy_get_balancer(apr_pool_t *p,
     for (i = 0; i < conf->balancers->nelts; i++) {
         if (balancer->hash.def == hash.def && balancer->hash.fnv == hash.fnv) {
             if (!care || !balancer->s->inactive) {
+                free(uri);
                 return balancer;
             }
         }
         balancer++;
     }
+    free(uri);
     return NULL;
 }
 
@@ -1139,6 +1145,8 @@ PROXY_DECLARE(char *) ap_proxy_update_balancer(apr_pool_t *p,
 
 #define PROXY_UNSET_NONCE '\n'
 
+extern struct orbit_allocator *oballoc;
+
 PROXY_DECLARE(char *) ap_proxy_define_balancer(apr_pool_t *p,
                                                proxy_balancer **balancer,
                                                proxy_server_conf *conf,
@@ -1161,7 +1169,7 @@ PROXY_DECLARE(char *) ap_proxy_define_balancer(apr_pool_t *p,
         *q = '\0';
 
     ap_str_tolower(uri);
-    *balancer = apr_array_push(conf->balancers);
+    *balancer = apr_array_push_orbit(conf->balancers);
     memset(*balancer, 0, sizeof(proxy_balancer));
 
     /*
@@ -1171,16 +1179,19 @@ PROXY_DECLARE(char *) ap_proxy_define_balancer(apr_pool_t *p,
     lbmethod = ap_lookup_provider(PROXY_LBMETHOD, "byrequests", "0");
     (*balancer)->lbmethod = lbmethod;
     
-    (*balancer)->workers = apr_array_make(p, 5, sizeof(proxy_worker *));
+    (*balancer)->workers = apr_array_make_orbit(oballoc, 5, sizeof(proxy_worker *));
 #if APR_HAS_THREADS
     (*balancer)->gmutex = NULL;
     (*balancer)->tmutex = NULL;
 #endif
 
+    /* Is this pool also shared..? */
     if (do_malloc)
         bshared = ap_malloc(sizeof(proxy_balancer_shared));
     else
-        bshared = apr_palloc(p, sizeof(proxy_balancer_shared));
+        bshared = orbit_alloc(oballoc, sizeof(proxy_balancer_shared));
+        // FIXME: integrate apr pool
+        // bshared = apr_palloc(p, sizeof(proxy_balancer_shared));
 
     memset(bshared, 0, sizeof(proxy_balancer_shared));
 
@@ -1882,8 +1893,9 @@ PROXY_DECLARE(char *) ap_proxy_define_worker(apr_pool_t *p,
     if (balancer) {
         proxy_worker **runtime;
         /* recall that we get a ptr to the ptr here */
-        runtime = apr_array_push(balancer->workers);
-        *worker = *runtime = apr_palloc(p, sizeof(proxy_worker));   /* right to left baby */
+        runtime = apr_array_push_orbit(balancer->workers);
+        // *worker = *runtime = apr_palloc(p, sizeof(proxy_worker));   /* right to left baby */
+        *worker = *runtime = orbit_alloc(oballoc, sizeof(proxy_worker));   /* right to left baby */
         /* we've updated the list of workers associated with
          * this balancer *locally* */
         balancer->wupdated = apr_time_now();
@@ -1901,7 +1913,8 @@ PROXY_DECLARE(char *) ap_proxy_define_worker(apr_pool_t *p,
     if (do_malloc)
         wshared = ap_malloc(sizeof(proxy_worker_shared));  /* will be freed ap_proxy_share_worker */
     else
-        wshared = apr_palloc(p, sizeof(proxy_worker_shared));
+        wshared = orbit_alloc(oballoc, sizeof(proxy_worker_shared));
+        // wshared = apr_palloc(p, sizeof(proxy_worker_shared));
 
     memset(wshared, 0, sizeof(proxy_worker_shared));
 

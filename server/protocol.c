@@ -1217,7 +1217,8 @@ AP_DECLARE(void) ap_get_mime_headers_core(request_rec *r, apr_bucket_brigade *bb
                 }
             }
 
-            apr_table_addn(r->headers_in, last_field, value);
+            // apr_table_addn(r->headers_in, last_field, value);
+            apr_table_add(r->headers_in, last_field, value);
 
             /* This last_field header is now stored in headers_in,
              * resume processing of the current input line.
@@ -1256,6 +1257,38 @@ AP_DECLARE(void) ap_get_mime_headers(request_rec *r)
     apr_brigade_destroy(tmp_bb);
 }
 
+extern struct orbit_allocator *oballoc;
+static struct orbit_pool *obpools[16];
+static int obpools_cursor = 0;
+static pthread_spinlock_t oblock;
+static int inited = 0;
+
+/* TODO: create pool dynamically? */
+struct orbit_allocator *get_oballoc(void)
+{
+	int i;
+	struct orbit_allocator *alloc;
+
+    if (!inited) pthread_spin_init(&oblock, PTHREAD_PROCESS_PRIVATE);
+	pthread_spin_lock(&oblock);
+	if (!obpools[0]) {
+		for (i = 0; i < 16; ++i)
+			obpools[i] = orbit_pool_create(1024 * 1024);
+	}
+	alloc = orbit_allocator_from_pool(obpools[obpools_cursor++], false);
+	if (obpools_cursor == 16) obpools_cursor = 0;
+	pthread_spin_unlock(&oblock);
+	return alloc;
+}
+
+apr_status_t oballoc_cleanup(void *alloc_)
+{
+    struct orbit_allocator *alloc = (struct orbit_allocator*)alloc_;
+    *alloc->allocated = 0;
+    orbit_allocator_destroy(alloc);
+    return APR_SUCCESS;
+}
+
 request_rec *ap_read_request(conn_rec *conn)
 {
     request_rec *r;
@@ -1272,6 +1305,8 @@ request_rec *ap_read_request(conn_rec *conn)
     r = apr_pcalloc(p, sizeof(request_rec));
     AP_READ_REQUEST_ENTRY((intptr_t)r, (uintptr_t)conn);
     r->pool            = p;
+    r->oballoc         = get_oballoc();
+    apr_pool_cleanup_register(r->pool, r->oballoc, oballoc_cleanup, NULL);
     r->connection      = conn;
     r->server          = conn->base_server;
 
@@ -1287,6 +1322,10 @@ request_rec *ap_read_request(conn_rec *conn)
     r->err_headers_out = apr_table_make(r->pool, 5);
     r->trailers_out    = apr_table_make(r->pool, 5);
     r->notes           = apr_table_make(r->pool, 5);
+    // ???: `subprocess_env` and `notes` are used in orbit load balancer,
+    // but main program may use apr_table_setn to set arbitrary data.
+    // For easier implementation and fewer data copying, we choose to apply
+    // `setn` in main program.
 
     r->request_config  = ap_create_request_config(r->pool);
     /* Must be set before we run create request hook */

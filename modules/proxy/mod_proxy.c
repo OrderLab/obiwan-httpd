@@ -1345,17 +1345,20 @@ cleanup:
 /* -------------------------------------------------------------- */
 /* Setup configurable data */
 
+extern struct orbit_allocator *oballoc;
+
 static void * create_proxy_config(apr_pool_t *p, server_rec *s)
 {
-    proxy_server_conf *ps = apr_pcalloc(p, sizeof(proxy_server_conf));
+    // proxy_server_conf *ps = apr_pcalloc(p, sizeof(proxy_server_conf));
+    proxy_server_conf *ps = memset(orbit_alloc(oballoc, sizeof(proxy_server_conf)), 0, sizeof(proxy_server_conf));
 
     ps->sec_proxy = apr_array_make(p, 10, sizeof(ap_conf_vector_t *));
     ps->proxies = apr_array_make(p, 10, sizeof(struct proxy_remote));
     ps->aliases = apr_array_make(p, 10, sizeof(struct proxy_alias));
     ps->noproxies = apr_array_make(p, 10, sizeof(struct noproxy_entry));
     ps->dirconn = apr_array_make(p, 10, sizeof(struct dirconn_entry));
-    ps->workers = apr_array_make(p, 10, sizeof(proxy_worker));
-    ps->balancers = apr_array_make(p, 10, sizeof(proxy_balancer));
+    ps->workers = apr_array_make_orbit(oballoc, 10, sizeof(proxy_worker));
+    ps->balancers = apr_array_make_orbit(oballoc, 10, sizeof(proxy_balancer));
     ps->forward = NULL;
     ps->reverse = NULL;
     ps->domain = NULL;

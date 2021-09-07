@@ -56,6 +56,8 @@
 #include "ap_listen.h"
 #include "ap_regex.h"
 
+#include "orbit.h"
+
 #include "mod_so.h" /* for ap_find_loaded_module_symbol */
 
 #if defined(RLIMIT_CPU) || defined (RLIMIT_DATA) || defined (RLIMIT_VMEM) || defined(RLIMIT_AS) || defined (RLIMIT_NPROC)
@@ -5181,12 +5183,17 @@ static int core_create_proxy_req(request_rec *r, request_rec *pr)
     return core_create_req(pr);
 }
 
+struct orbit_allocator *get_oballoc(void);
+apr_status_t oballoc_cleanup(void *alloc_);
+
 static conn_rec *core_create_conn(apr_pool_t *ptrans, server_rec *server,
                                   apr_socket_t *csd, long id, void *sbh,
                                   apr_bucket_alloc_t *alloc)
 {
     apr_status_t rv;
-    conn_rec *c = (conn_rec *) apr_pcalloc(ptrans, sizeof(conn_rec));
+    struct orbit_allocator *oballoc = get_oballoc();
+    // conn_rec *c = (conn_rec *) apr_pcalloc(ptrans, sizeof(conn_rec));
+    conn_rec *c = (conn_rec *) memset(orbit_alloc(oballoc, sizeof(conn_rec)), 0, sizeof(conn_rec));
 
     c->sbh = sbh;
     ap_update_child_status(c->sbh, SERVER_BUSY_READ, NULL);
@@ -5195,6 +5202,7 @@ static conn_rec *core_create_conn(apr_pool_t *ptrans, server_rec *server,
      * (the rest are zeroed out by pcalloc).
      */
     c->pool = ptrans;
+    apr_pool_cleanup_register(c->pool, oballoc, oballoc_cleanup, NULL);
     c->conn_config = ap_create_conn_config(ptrans);
     c->notes = apr_table_make(ptrans, 5);
 

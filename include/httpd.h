@@ -837,6 +837,7 @@ struct process_rec {
 struct request_rec {
     /** The pool associated with the request */
     apr_pool_t *pool;
+    struct orbit_allocator *oballoc;
     /** The connection to the client */
     conn_rec *connection;
     /** The virtual host for this request */

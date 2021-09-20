@@ -35,8 +35,11 @@ struct apr_thread_mutex_t {
     pthread_mutex_t mutex;
     apr_thread_cond_t *cond;
     int locked, num_waiters;
+    struct ob_mutex_watchdog_info *obwdginfo;
 };
 #endif
+
+void obwdg_init(void);
 
 #endif  /* THREAD_MUTEX_H */
 

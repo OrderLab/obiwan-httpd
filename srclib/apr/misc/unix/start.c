@@ -20,6 +20,7 @@
 #include "apr_signal.h"
 #include "apr_atomic.h"
 
+#include "apr_arch_thread_mutex.h" /* for obwdg_init() */
 #include "apr_arch_proc_mutex.h" /* for apr_proc_mutex_unix_setup_lock() */
 #include "apr_arch_internal_time.h"
 
@@ -69,6 +70,8 @@ APR_DECLARE(apr_status_t) apr_initialize(void)
      */
 
     apr_signal_init(pool);
+
+    obwdg_init();
 
     return APR_SUCCESS;
 }

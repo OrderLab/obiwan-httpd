@@ -51,7 +51,8 @@
  * The 'array' functions...
  */
 
-static void make_array_core(apr_array_header_t *res, apr_pool_t *p,
+static void make_array_core_real(apr_array_header_t *res, apr_pool_t *p,
+                struct orbit_allocator *oballoc,
 			    int nelts, int elt_size, int clear)
 {
     /*
@@ -62,17 +63,36 @@ static void make_array_core(apr_array_header_t *res, apr_pool_t *p,
         nelts = 1;
     }
 
-    if (clear) {
-        res->elts = apr_pcalloc(p, nelts * elt_size);
-    }
-    else {
-        res->elts = apr_palloc(p, nelts * elt_size);
+    if (p) {
+        if (clear) {
+            res->elts = apr_pcalloc(p, nelts * elt_size);
+        }
+        else {
+            res->elts = apr_palloc(p, nelts * elt_size);
+        }
+    } else {
+        res->elts = orbit_alloc(oballoc, nelts * elt_size);
+        if (clear)
+            memset(res->elts, 0, nelts * elt_size);
     }
 
     res->pool = p;
+    res->obpool = oballoc;
     res->elt_size = elt_size;
     res->nelts = 0;		/* No active elements yet... */
     res->nalloc = nelts;	/* ...but this many allocated */
+}
+
+static inline void make_array_core(apr_array_header_t *res, apr_pool_t *p,
+                int nelts, int elt_size, int clear)
+{
+    make_array_core_real(res, p, NULL, nelts, elt_size, clear);
+}
+
+static inline void make_array_core_orbit(apr_array_header_t *res, struct orbit_allocator *oballoc,
+                int nelts, int elt_size, int clear)
+{
+    make_array_core_real(res, NULL, oballoc, nelts, elt_size, clear);
 }
 
 APR_DECLARE(int) apr_is_empty_array(const apr_array_header_t *a)
@@ -81,12 +101,22 @@ APR_DECLARE(int) apr_is_empty_array(const apr_array_header_t *a)
 }
 
 APR_DECLARE(apr_array_header_t *) apr_array_make(apr_pool_t *p,
-						int nelts, int elt_size)
+                        int nelts, int elt_size)
 {
     apr_array_header_t *res;
 
     res = (apr_array_header_t *) apr_palloc(p, sizeof(apr_array_header_t));
     make_array_core(res, p, nelts, elt_size, 1);
+    return res;
+}
+
+APR_DECLARE(apr_array_header_t *) apr_array_make_orbit(struct orbit_allocator *oballoc,
+						int nelts, int elt_size)
+{
+    apr_array_header_t *res;
+
+    res = (apr_array_header_t *) orbit_alloc(oballoc, sizeof(apr_array_header_t));
+    make_array_core_orbit(res, oballoc, nelts, elt_size, 1);
     return res;
 }
 
@@ -104,13 +134,14 @@ APR_DECLARE(void *) apr_array_pop(apr_array_header_t *arr)
     return arr->elts + (arr->elt_size * (--arr->nelts));
 }
 
-APR_DECLARE(void *) apr_array_push(apr_array_header_t *arr)
+static APR_DECLARE(void *) apr_array_push_real(apr_array_header_t *arr, bool orbit)
 {
     if (arr->nelts == arr->nalloc) {
         int new_size = (arr->nalloc <= 0) ? 1 : arr->nalloc * 2;
         char *new_data;
 
-        new_data = apr_palloc(arr->pool, arr->elt_size * new_size);
+        new_data = orbit ? orbit_alloc(arr->obpool, arr->elt_size * new_size)
+                         : apr_palloc(arr->pool, arr->elt_size * new_size);
 
         memcpy(new_data, arr->elts, arr->nalloc * arr->elt_size);
         memset(new_data + arr->nalloc * arr->elt_size, 0,
@@ -123,13 +154,24 @@ APR_DECLARE(void *) apr_array_push(apr_array_header_t *arr)
     return arr->elts + (arr->elt_size * (arr->nelts - 1));
 }
 
+APR_DECLARE(void *) apr_array_push(apr_array_header_t *arr)
+{
+    return apr_array_push_real(arr, false);
+}
+
+APR_DECLARE(void *) apr_array_push_orbit(apr_array_header_t *arr)
+{
+    return apr_array_push_real(arr, true);
+}
+
 static void *apr_array_push_noclear(apr_array_header_t *arr)
 {
     if (arr->nelts == arr->nalloc) {
         int new_size = (arr->nalloc <= 0) ? 1 : arr->nalloc * 2;
         char *new_data;
 
-        new_data = apr_palloc(arr->pool, arr->elt_size * new_size);
+        new_data = arr->obpool ? orbit_alloc(arr->obpool, arr->elt_size * new_size)
+                               : apr_palloc(arr->pool, arr->elt_size * new_size);
 
         memcpy(new_data, arr->elts, arr->nalloc * arr->elt_size);
         arr->elts = new_data;
@@ -402,6 +444,18 @@ APR_DECLARE(apr_table_t *) apr_table_make(apr_pool_t *p, int nelts)
     apr_table_t *t = apr_palloc(p, sizeof(apr_table_t));
 
     make_array_core(&t->a, p, nelts, sizeof(apr_table_entry_t), 0);
+#ifdef MAKE_TABLE_PROFILE
+    t->creator = __builtin_return_address(0);
+#endif
+    t->index_initialized = 0;
+    return t;
+}
+
+APR_DECLARE(apr_table_t *) apr_table_make_orbit(struct orbit_allocator *alloc, int nelts)
+{
+    apr_table_t *t = orbit_alloc(alloc, sizeof(apr_table_t));
+
+    make_array_core_orbit(&t->a, alloc, nelts, sizeof(apr_table_entry_t), 0);
 #ifdef MAKE_TABLE_PROFILE
     t->creator = __builtin_return_address(0);
 #endif
@@ -802,8 +856,13 @@ APR_DECLARE(void) apr_table_add(apr_table_t *t, const char *key,
     }
     COMPUTE_KEY_CHECKSUM(key, checksum);
     elts = (apr_table_entry_t *) table_push(t);
-    elts->key = apr_pstrdup(t->a.pool, key);
-    elts->val = apr_pstrdup(t->a.pool, val);
+    if (t->a.pool) {
+        elts->key = apr_pstrdup(t->a.pool, key);
+        elts->val = apr_pstrdup(t->a.pool, val);
+    } else {
+        elts->key = strcpy(orbit_alloc(t->a.obpool, strlen(key) + 1), key);
+        elts->val = strcpy(orbit_alloc(t->a.obpool, strlen(val) + 1), val);
+    }
     elts->key_checksum = checksum;
 }
 

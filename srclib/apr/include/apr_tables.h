@@ -25,6 +25,8 @@
 #include "apr.h"
 #include "apr_pools.h"
 
+#include "orbit.h"
+
 #if APR_HAVE_STDARG_H
 #include <stdarg.h>     /* for va_list */
 #endif
@@ -62,6 +64,7 @@ typedef struct apr_array_header_t apr_array_header_t;
 struct apr_array_header_t {
     /** The pool the array is allocated out of */
     apr_pool_t *pool;
+    struct orbit_allocator *obpool;
     /** The amount of memory allocated for each element of the array */
     int elt_size;
     /** The number of active elements in the array */
@@ -120,6 +123,8 @@ APR_DECLARE(int) apr_is_empty_array(const apr_array_header_t *a);
  */
 APR_DECLARE(apr_array_header_t *) apr_array_make(apr_pool_t *p,
                                                  int nelts, int elt_size);
+APR_DECLARE(apr_array_header_t *) apr_array_make_orbit(struct orbit_allocator *oballoc,
+                                                 int nelts, int elt_size);
 
 /**
  * Add a new element to an array (as a first-in, last-out stack).
@@ -129,6 +134,7 @@ APR_DECLARE(apr_array_header_t *) apr_array_make(apr_pool_t *p,
  *         allocate new space for the new element.
  */
 APR_DECLARE(void *) apr_array_push(apr_array_header_t *arr);
+APR_DECLARE(void *) apr_array_push_orbit(apr_array_header_t *arr);
 
 /** A helper macro for accessing a member of an APR array.
  *
@@ -230,6 +236,7 @@ APR_DECLARE(char *) apr_array_pstrcat(apr_pool_t *p,
  * @warning This table can only store text data
  */
 APR_DECLARE(apr_table_t *) apr_table_make(apr_pool_t *p, int nelts);
+APR_DECLARE(apr_table_t *) apr_table_make_orbit(struct orbit_allocator *alloc, int nelts);
 
 /**
  * Create a new table and copy another table into it.

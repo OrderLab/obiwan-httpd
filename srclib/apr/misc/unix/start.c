@@ -48,6 +48,8 @@ APR_DECLARE(apr_status_t) apr_initialize(void)
         return APR_SUCCESS;
     }
 
+    obwdg_init();
+
 #if !defined(BEOS) && !defined(OS2)
     apr_proc_mutex_unix_setup_lock();
     apr_unix_setup_time();
@@ -70,8 +72,6 @@ APR_DECLARE(apr_status_t) apr_initialize(void)
      */
 
     apr_signal_init(pool);
-
-    obwdg_init();
 
     return APR_SUCCESS;
 }

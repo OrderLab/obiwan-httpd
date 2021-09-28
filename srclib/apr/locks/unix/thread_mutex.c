@@ -30,7 +30,16 @@
 // FIXME: using a fixed size slots and expensive traverse just for PoC
 #define NSLOTS 1024
 #define OBWDG_INTERVAL 1
-#define OBWDG_TIMEOUT 1
+#define OBWDG_TIMEOUT 60
+// #define OBWDG_TIMEOUT 10
+
+#if 0
+#define obprintf(fmt, ...) do { \
+        fprintf(fmt, ##__VA_ARGS__); \
+    } while (0)
+#else
+#define obprintf(fmt, ...) do { } while (0)
+#endif
 
 /* Watchdog counter that is reset by the orbit and inc by the main program. */
 static struct ob_watchdog_counter_slot {
@@ -54,6 +63,12 @@ static struct ob_mutex_watchdog_info {
     time_t time;
     size_t counter_slot_idx;
     apr_thread_mutex_t *mutex;
+    const char *creator_func;
+    const char *creator_file;
+    int creator_line;
+    const char *holder_func;
+    const char *holder_file;
+    int holder_line;
 } *obwdg_info_slots = NULL;
 static size_t info_slot_used = 0;
 
@@ -74,6 +89,24 @@ static void *obwdg_bg_loop(void *aux);
 static unsigned long obwdg_diagnosis(void *store, void *argbuf);
 static void *obwdg_create_store(void);
 
+static void dump_counter(struct ob_watchdog_counter_slot *slot)
+{
+    fprintf(stderr, "counter info: id=%ld, counter=%hu, holder=%hu\n",
+            slot - obwdg_counter_slots, slot->counter, slot->nholds);
+}
+
+static void dump_wdg_info(struct ob_mutex_watchdog_info *info)
+{
+    fprintf(stderr, "lock info: id=%ld, tid=%d\n"
+            "\t time=%ld, slotidx=%lu mutex=%p\n"
+            "\t creator = %s:%d:%s\n"
+            "\t holder = %s:%d:%s\n",
+            info - obwdg_info_slots, info->holder_tid,
+            info->time, info->counter_slot_idx, info->mutex,
+            info->creator_file, info->creator_line, info->creator_func,
+            info->holder_file, info->holder_line, info->holder_func);
+}
+
 void obwdg_init() {
     if (obwdg_info_alloc != NULL) return;
     obwdg_counter_pool = orbit_pool_create(NULL, 64 * 1024 * 1024);
@@ -88,7 +121,7 @@ void obwdg_init() {
     obwdg_info_slots = orbit_calloc(obwdg_info_alloc,
             sizeof(struct ob_mutex_watchdog_info) * NSLOTS);
 
-    obwdg = orbit_create("ob mutex watchdog", obwdg_entry, NULL);
+    obwdg = orbit_create("ob mutex watchdog", obwdg_entry, obwdg_create_store);
     int ret = pthread_create(&obwdg_bg, NULL, obwdg_bg_loop, NULL);
     assert(ret == 0);
 }
@@ -127,6 +160,7 @@ static inline struct ob_mutex_watchdog_info *grab_info_slot() {
         fprintf(stderr, "orbit: info slots used up\n");
         abort();
     }
+    obwdg_info_slots[slot_idx].counter_slot_idx = INVIDX;
     return obwdg_info_slots + slot_idx;
 }
 
@@ -134,12 +168,20 @@ static inline void release_info_slot(struct ob_mutex_watchdog_info *info) {
     (void)info;
 }
 
-static inline void obwdg_acquired(apr_thread_mutex_t *mutex) {
+void obwdg_acquired(apr_thread_mutex_t *mutex,
+        const char *func, const char *file, int line, const char *func2, int line2)
+{
     grab_counter_slot();
 
     size_t idx = counter_slot_idx;
+    /* It is safe to add modify the counter and holder since the current
+     * thread owns this slot. */
     ++obwdg_counter_slots[idx].counter;
     ++obwdg_counter_slots[idx].nholds;
+    obprintf(stderr, "counter %lu acquiring lock %ld by tid %ld via %s:%d, nholds %d\n", idx,
+            mutex->obwdginfo - obwdg_info_slots,
+            syscall(SYS_gettid), func2, line2,
+            obwdg_counter_slots[idx].nholds);
 
     /* Older Linux does not have gittid wrapper */
     /* mutex->obwdginfo->holder_tid = gettid(); */
@@ -147,18 +189,31 @@ static inline void obwdg_acquired(apr_thread_mutex_t *mutex) {
     mutex->obwdginfo->time = time(NULL);
     mutex->obwdginfo->counter_slot_idx = idx;
     mutex->obwdginfo->mutex = mutex;
+    mutex->obwdginfo->holder_func = func;
+    mutex->obwdginfo->holder_file = file;
+    mutex->obwdginfo->holder_line = line;
 }
+#define obwdg_acquired(mutex) obwdg_acquired(mutex, func, file, line, __func__, __LINE__)
 
-static inline void obwdg_released(apr_thread_mutex_t *mutex) {
+void obwdg_released(apr_thread_mutex_t *mutex,
+        const char *func, const char *file, int line)
+{
     size_t idx = counter_slot_idx;
     ++obwdg_counter_slots[idx].counter;
     --obwdg_counter_slots[idx].nholds;
+    obprintf(stderr, "counter %lu releasing lock %ld by tid %ld, nholds %d\n", idx,
+            mutex->obwdginfo - obwdg_info_slots,
+            syscall(SYS_gettid), obwdg_counter_slots[idx].nholds);
 
     mutex->obwdginfo->holder_tid = 0;
     mutex->obwdginfo->time = time(NULL);
     mutex->obwdginfo->counter_slot_idx = INVIDX;
     mutex->obwdginfo->mutex = NULL;
+    mutex->obwdginfo->holder_func = NULL;
+    mutex->obwdginfo->holder_file = NULL;
+    mutex->obwdginfo->holder_line = 0;
 }
+#define obwdg_released(mutex) obwdg_released(mutex, func, file, line)
 
 struct obwdg_store {
     struct slot_stats {
@@ -195,15 +250,15 @@ static unsigned long obwdg_helper_reset(size_t nargs, unsigned long argv[]) {
     return 0;
 }
 
-#define xstringify(x) stringify(x)
-#define stringify(x) #x
-
 static unsigned long obwdg_helper_print(size_t nargs, unsigned long argv[]) {
-    size_t slot_idx = argv[0];
-    struct ob_mutex_watchdog_info *slot = obwdg_info_slots + slot_idx;
-    fprintf(stderr, "orbit: slot %lu has been occupied for "xstringify(OBWDG_TIMEOUT)" seconds\n", slot_idx);
-    fprintf(stderr, "orbit: slot %lu found one holder at unix time %ld, tid=%d, mutex=%p\n",
-            slot_idx, slot->time, slot->holder_tid, slot->mutex);
+    size_t counter_idx = argv[0];
+    size_t info_idx = argv[1];
+    int unchanged = argv[2];
+    struct ob_mutex_watchdog_info *info = obwdg_info_slots + info_idx;
+    fprintf(stderr, "orbit: counter %lu has been occupied by lock %lu for %d checks\n",
+            counter_idx, info_idx, unchanged);
+    dump_counter(obwdg_counter_slots + counter_idx);
+    dump_wdg_info(obwdg_info_slots + info_idx);
     return 0;
 }
 
@@ -227,9 +282,10 @@ static unsigned long obwdg_entry(void *store_, void *argbuf) {
             /* The counter hasn't been changed for 1 sec. Note down this in
              * unchanged_cnt. */
             if (++last_slot->unchanged_cnt % OBWDG_TIMEOUT == 0) {
+                obprintf(stderr, "holders %d\n", curr_slot->nholds);
                 /* We should trigger a diagnosis held for 1 min. */
                 next_check = 1;
-                fprintf(stderr, "orbit: found slot %d to have long running thread\n", i);
+                obprintf(stderr, "orbit: found slot %d to have long running thread\n", i);
             }
         } else {
             /* Either nholds or counter has been changed, reset the slot. */
@@ -271,8 +327,10 @@ static unsigned long obwdg_diagnosis(void *store_, void *argbuf) {
         // TODO: more advanced diagnosis: get reason for the wait
         for (size_t j = 0; j < args->info_slot_used; ++j) {
             if (args->info_slots[j].counter_slot_idx == i) {
-                unsigned long argv[] = { i, };
-                orbit_scratch_push_operation(&scratch, obwdg_helper_print, 1, argv);
+                // TODO: change this to copy the whole `info` struct to
+                // operation with new API.
+                unsigned long argv[] = { i, j, last_slot->unchanged_cnt, };
+                orbit_scratch_push_operation(&scratch, obwdg_helper_print, 3, argv);
             }
         }
     }
@@ -294,6 +352,12 @@ static void *obwdg_bg_loop(void *aux) {
 
         if (check_type == 1) {
             /* diagnosis */
+#if 0
+            for (int i = 0; i < counter_slot_used; ++i)
+                dump_counter(obwdg_counter_slots + i);
+            for (int i = 0; i < info_slot_used; ++i)
+                dump_wdg_info(obwdg_info_slots + i);
+#endif
             struct obwdg_diagnosis_args args = {
                 .info_slots = obwdg_info_slots,
                 .counter_slot_used = counter_slot_used,
@@ -337,6 +401,9 @@ static apr_status_t thread_mutex_cleanup(void *data)
     apr_thread_mutex_t *mutex = data;
     apr_status_t rv;
 
+    mutex->obwdginfo->creator_func = NULL;
+    mutex->obwdginfo->creator_file = NULL;
+    mutex->obwdginfo->creator_line = 0;
     release_info_slot(mutex->obwdginfo);
 
     rv = pthread_mutex_destroy(&mutex->mutex);
@@ -348,9 +415,9 @@ static apr_status_t thread_mutex_cleanup(void *data)
     return rv;
 } 
 
-APR_DECLARE(apr_status_t) apr_thread_mutex_create(apr_thread_mutex_t **mutex,
-                                                  unsigned int flags,
-                                                  apr_pool_t *pool)
+APR_DECLARE(apr_status_t) __apr_thread_mutex_create(apr_thread_mutex_t **mutex,
+        unsigned int flags, apr_pool_t *pool,
+        const char *func, const char *file, int line)
 {
     apr_thread_mutex_t *new_mutex;
     apr_status_t rv;
@@ -409,12 +476,17 @@ APR_DECLARE(apr_status_t) apr_thread_mutex_create(apr_thread_mutex_t **mutex,
                               apr_pool_cleanup_null);
 
     new_mutex->obwdginfo = grab_info_slot();
+    new_mutex->obwdginfo->creator_func = func;
+    new_mutex->obwdginfo->creator_file = file;
+    new_mutex->obwdginfo->creator_line = line;
+    obprintf(stderr, "orbit: mutex %p created at %s:%d:%s\n", new_mutex, file, line, func);
 
     *mutex = new_mutex;
     return APR_SUCCESS;
 }
 
-APR_DECLARE(apr_status_t) apr_thread_mutex_lock(apr_thread_mutex_t *mutex)
+APR_DECLARE(apr_status_t) __apr_thread_mutex_lock(apr_thread_mutex_t *mutex,
+        const char *func, const char *file, int line)
 {
     apr_status_t rv;
 
@@ -452,17 +524,19 @@ APR_DECLARE(apr_status_t) apr_thread_mutex_lock(apr_thread_mutex_t *mutex)
     }
 
     rv = pthread_mutex_lock(&mutex->mutex);
-#ifdef HAVE_ZOS_PTHREADS
     if (rv) {
+#ifdef HAVE_ZOS_PTHREADS
         rv = errno;
-    }
 #endif
-    obwdg_acquired(mutex);
+    } else {
+        obwdg_acquired(mutex);
+    }
 
     return rv;
 }
 
-APR_DECLARE(apr_status_t) apr_thread_mutex_trylock(apr_thread_mutex_t *mutex)
+APR_DECLARE(apr_status_t) __apr_thread_mutex_trylock(apr_thread_mutex_t *mutex,
+        const char *func, const char *file, int line)
 {
     apr_status_t rv;
 
@@ -503,14 +577,16 @@ APR_DECLARE(apr_status_t) apr_thread_mutex_trylock(apr_thread_mutex_t *mutex)
         rv = errno;
 #endif
         return (rv == EBUSY) ? APR_EBUSY : rv;
+    } else {
+        obwdg_acquired(mutex);
     }
-    obwdg_acquired(mutex);
 
     return APR_SUCCESS;
 }
 
-APR_DECLARE(apr_status_t) apr_thread_mutex_timedlock(apr_thread_mutex_t *mutex,
-                                                 apr_interval_time_t timeout)
+APR_DECLARE(apr_status_t) __apr_thread_mutex_timedlock(apr_thread_mutex_t *mutex,
+        apr_interval_time_t timeout,
+        const char *func, const char *file, int line)
 {
     apr_status_t rv = APR_ENOTIMPL;
 #if APR_HAS_TIMEDLOCKS
@@ -602,10 +678,11 @@ APR_DECLARE(apr_status_t) apr_thread_mutex_timedlock(apr_thread_mutex_t *mutex,
     return rv;
 }
 
-APR_DECLARE(apr_status_t) apr_thread_mutex_unlock(apr_thread_mutex_t *mutex)
+APR_DECLARE(apr_status_t) __apr_thread_mutex_unlock(apr_thread_mutex_t *mutex,
+        const char *func, const char *file, int line)
 {
     apr_status_t status;
-    bool a_path = !!(mutex->cond);
+    obprintf(stderr, "tid %ld try unlock %p\n", syscall(SYS_gettid), mutex);
 
     if (mutex->cond) {
         status = pthread_mutex_lock(&mutex->mutex);
@@ -628,8 +705,8 @@ APR_DECLARE(apr_status_t) apr_thread_mutex_unlock(apr_thread_mutex_t *mutex)
         }
 
         mutex->locked = 0;
-        obwdg_released(mutex);
     }
+    obwdg_released(mutex);
 
     status = pthread_mutex_unlock(&mutex->mutex);
 #ifdef HAVE_ZOS_PTHREADS
@@ -637,13 +714,12 @@ APR_DECLARE(apr_status_t) apr_thread_mutex_unlock(apr_thread_mutex_t *mutex)
         status = errno;
     }
 #endif
-    if (!status && !a_path)
-        obwdg_released(mutex);
 
     return status;
 }
 
-APR_DECLARE(apr_status_t) apr_thread_mutex_destroy(apr_thread_mutex_t *mutex)
+APR_DECLARE(apr_status_t) __apr_thread_mutex_destroy(apr_thread_mutex_t *mutex,
+        const char *func, const char *file, int line)
 {
     apr_status_t rv, rv2 = APR_SUCCESS;
 

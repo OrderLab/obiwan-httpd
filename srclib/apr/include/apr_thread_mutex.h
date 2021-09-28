@@ -49,6 +49,8 @@ typedef struct apr_thread_mutex_t apr_thread_mutex_t;
 #include "apr_pools.h"
 #include "apr_time.h"
 
+#define HAS_ORBIT 1
+
 /**
  * Create and initialize a mutex that can be used to synchronize threads.
  * @param mutex the memory address where the newly created mutex will be
@@ -64,15 +66,40 @@ typedef struct apr_thread_mutex_t apr_thread_mutex_t;
  * most optimal mutex based on a given platform's performance characteristics,
  * it will behave as either a nested or an unnested lock.
  */
+#if !HAS_ORBIT || defined(DOXYGEN)
 APR_DECLARE(apr_status_t) apr_thread_mutex_create(apr_thread_mutex_t **mutex,
                                                   unsigned int flags,
                                                   apr_pool_t *pool);
+#else
+APR_DECLARE(apr_status_t) __apr_thread_mutex_create(apr_thread_mutex_t **mutex,
+        unsigned int flags, apr_pool_t *pool,
+        const char *func, const char *file, int line);
+static inline APR_DECLARE(apr_status_t) apr_thread_mutex_create(
+        apr_thread_mutex_t **mutex, unsigned int flags, apr_pool_t *pool)
+{
+    return __apr_thread_mutex_create(mutex, flags, pool, "unknown", "unknown", 0);
+}
+#define apr_thread_mutex_create(mutex, flags, pool) \
+    __apr_thread_mutex_create(mutex, flags, pool, __func__, __FILE__, __LINE__)
+#endif
 /**
  * Acquire the lock for the given mutex. If the mutex is already locked,
  * the current thread will be put to sleep until the lock becomes available.
  * @param mutex the mutex on which to acquire the lock.
  */
+#if !HAS_ORBIT || defined(DOXYGEN)
 APR_DECLARE(apr_status_t) apr_thread_mutex_lock(apr_thread_mutex_t *mutex);
+#else
+APR_DECLARE(apr_status_t) __apr_thread_mutex_lock(apr_thread_mutex_t *mutex,
+        const char *func, const char *file, int line);
+static inline APR_DECLARE(apr_status_t)
+apr_thread_mutex_lock(apr_thread_mutex_t *mutex)
+{
+    return __apr_thread_mutex_lock(mutex, "unknown", "unknown", 0);
+}
+#define apr_thread_mutex_lock(mutex) \
+    __apr_thread_mutex_lock(mutex, __func__, __FILE__, __LINE__)
+#endif
 
 /**
  * Attempt to acquire the lock for the given mutex. If the mutex has already
@@ -81,7 +108,19 @@ APR_DECLARE(apr_status_t) apr_thread_mutex_lock(apr_thread_mutex_t *mutex);
  * if the return value was APR_EBUSY, for portability reasons.
  * @param mutex the mutex on which to attempt the lock acquiring.
  */
+#if !HAS_ORBIT || defined(DOXYGEN)
 APR_DECLARE(apr_status_t) apr_thread_mutex_trylock(apr_thread_mutex_t *mutex);
+#else
+APR_DECLARE(apr_status_t) __apr_thread_mutex_trylock(apr_thread_mutex_t *mutex,
+        const char *func, const char *file, int line);
+static inline APR_DECLARE(apr_status_t)
+apr_thread_mutex_trylock(apr_thread_mutex_t *mutex)
+{
+    return __apr_thread_mutex_trylock(mutex, "unknown", "unknown", 0);
+}
+#define apr_thread_mutex_trylock(mutex) \
+    __apr_thread_mutex_trylock(mutex, __func__, __FILE__, __LINE__)
+#endif
 
 /**
  * Attempt to acquire the lock for the given mutex until timeout expires.
@@ -91,26 +130,65 @@ APR_DECLARE(apr_status_t) apr_thread_mutex_trylock(apr_thread_mutex_t *mutex);
  * @note A timeout negative or nul means immediate attempt, returning
  *       APR_TIMEUP without blocking if it the lock is already acquired.
  */
+#if !HAS_ORBIT || defined(DOXYGEN)
 APR_DECLARE(apr_status_t) apr_thread_mutex_timedlock(apr_thread_mutex_t *mutex,
                                                  apr_interval_time_t timeout);
+#else
+APR_DECLARE(apr_status_t) __apr_thread_mutex_timedlock(apr_thread_mutex_t *mutex,
+        apr_interval_time_t timeout,
+        const char *func, const char *file, int line);
+static inline APR_DECLARE(apr_status_t)
+apr_thread_mutex_timedlock(apr_thread_mutex_t *mutex, apr_interval_time_t timeout)
+{
+    return __apr_thread_mutex_timedlock(mutex, timeout, "unknown", "unknown", 0);
+}
+#define apr_thread_mutex_timedlock(mutex, timeout) \
+    __apr_thread_mutex_timedlock(mutex, timeout, __func__, __FILE__, __LINE__)
+#endif
 
 /**
  * Release the lock for the given mutex.
  * @param mutex the mutex from which to release the lock.
  */
+#if !HAS_ORBIT || defined(DOXYGEN)
 APR_DECLARE(apr_status_t) apr_thread_mutex_unlock(apr_thread_mutex_t *mutex);
+#else
+APR_DECLARE(apr_status_t) __apr_thread_mutex_unlock(apr_thread_mutex_t *mutex,
+        const char *func, const char *file, int line);
+static inline APR_DECLARE(apr_status_t)
+apr_thread_mutex_unlock(apr_thread_mutex_t *mutex)
+{
+    return __apr_thread_mutex_unlock(mutex, "unknown", "unknown", 0);
+}
+#define apr_thread_mutex_unlock(mutex) \
+    __apr_thread_mutex_unlock(mutex, __func__, __FILE__, __LINE__)
+#endif
 
 /**
  * Destroy the mutex and free the memory associated with the lock.
  * @param mutex the mutex to destroy.
  */
+#if !HAS_ORBIT || defined(DOXYGEN)
 APR_DECLARE(apr_status_t) apr_thread_mutex_destroy(apr_thread_mutex_t *mutex);
+#else
+APR_DECLARE(apr_status_t) __apr_thread_mutex_destroy(apr_thread_mutex_t *mutex,
+        const char *func, const char *file, int line);
+static inline APR_DECLARE(apr_status_t)
+apr_thread_mutex_destroy(apr_thread_mutex_t *mutex)
+{
+    return __apr_thread_mutex_destroy(mutex, "unknown", "unknown", 0);
+}
+#define apr_thread_mutex_destroy(mutex) \
+    __apr_thread_mutex_destroy(mutex, __func__, __FILE__, __LINE__)
+#endif
 
 /**
  * Get the pool used by this thread_mutex.
  * @return apr_pool_t the pool
  */
 APR_POOL_DECLARE_ACCESSOR(thread_mutex);
+
+#undef HAS_ORBIT
 
 #endif /* APR_HAS_THREADS */
 

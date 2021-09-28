@@ -34,6 +34,8 @@ extern "C" {
 
 #if APR_HAS_THREADS || defined(DOXYGEN)
 
+#define HAS_ORBIT 1
+
 /**
  * @defgroup apr_thread_cond Condition Variable Routines
  * @ingroup APR 
@@ -74,8 +76,20 @@ APR_DECLARE(apr_status_t) apr_thread_cond_create(apr_thread_cond_t **cond,
  * a condition variable, the caller should test whether the condition is already
  * met.
  */
+#if !HAS_ORBIT || defined(DOXYGEN)
 APR_DECLARE(apr_status_t) apr_thread_cond_wait(apr_thread_cond_t *cond,
                                                apr_thread_mutex_t *mutex);
+#else
+APR_DECLARE(apr_status_t) __apr_thread_cond_wait(apr_thread_cond_t *cond,
+        apr_thread_mutex_t *mutex, const char *func, const char *file, int line);
+static inline APR_DECLARE(apr_status_t)
+apr_thread_cond_wait(apr_thread_cond_t *cond, apr_thread_mutex_t *mutex)
+{
+    return __apr_thread_cond_wait(cond, mutex, "unknown", "unknown", 0);
+}
+#define apr_thread_cond_wait(cond, mutex) \
+    __apr_thread_cond_wait(cond, mutex, __func__, __FILE__, __LINE__)
+#endif
 
 /**
  * Put the active calling thread to sleep until signaled to wake up or
@@ -93,9 +107,23 @@ APR_DECLARE(apr_status_t) apr_thread_cond_wait(apr_thread_cond_t *cond,
  *        will wake up before this time, otherwise the error APR_TIMEUP
  *        is returned.
  */
+#if !HAS_ORBIT || defined(DOXYGEN)
 APR_DECLARE(apr_status_t) apr_thread_cond_timedwait(apr_thread_cond_t *cond,
                                                     apr_thread_mutex_t *mutex,
                                                     apr_interval_time_t timeout);
+#else
+APR_DECLARE(apr_status_t) __apr_thread_cond_timedwait(apr_thread_cond_t *cond,
+        apr_thread_mutex_t *mutex, apr_interval_time_t timeout,
+        const char *func, const char *file, int line);
+static inline APR_DECLARE(apr_status_t)
+apr_thread_cond_timedwait(apr_thread_cond_t *cond,
+        apr_thread_mutex_t *mutex, apr_interval_time_t timeout)
+{
+    return __apr_thread_cond_timedwait(cond, mutex, timeout, "unknown", "unknown", 0);
+}
+#define apr_thread_cond_timedwait(cond, mutex, timeout) \
+    __apr_thread_cond_timedwait(cond, mutex, timeout, __func__, __FILE__, __LINE__)
+#endif
 
 /**
  * Signals a single thread, if one exists, that is blocking on the given
@@ -127,6 +155,8 @@ APR_DECLARE(apr_status_t) apr_thread_cond_destroy(apr_thread_cond_t *cond);
  * @return apr_pool_t the pool
  */
 APR_POOL_DECLARE_ACCESSOR(thread_cond);
+
+#undef HAS_ORBIT
 
 #endif /* APR_HAS_THREADS */
 

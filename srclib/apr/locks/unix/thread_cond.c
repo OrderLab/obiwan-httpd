@@ -21,6 +21,13 @@
 #include "apr_arch_thread_mutex.h"
 #include "apr_arch_thread_cond.h"
 
+void obwdg_acquired(apr_thread_mutex_t *mutex,
+        const char *func, const char *file, int line, const char *func2, int line2);
+#define obwdg_acquired(mutex) obwdg_acquired(mutex, func, file, line, __func__, __LINE__)
+void obwdg_released(apr_thread_mutex_t *mutex,
+        const char *func, const char *file, int line);
+#define obwdg_released(mutex) obwdg_released(mutex, func, file, line)
+
 static apr_status_t thread_cond_cleanup(void *data)
 {
     apr_thread_cond_t *cond = (apr_thread_cond_t *)data;
@@ -60,12 +67,14 @@ APR_DECLARE(apr_status_t) apr_thread_cond_create(apr_thread_cond_t **cond,
     return APR_SUCCESS;
 }
 
-APR_DECLARE(apr_status_t) apr_thread_cond_wait(apr_thread_cond_t *cond,
-                                               apr_thread_mutex_t *mutex)
+APR_DECLARE(apr_status_t) __apr_thread_cond_wait(apr_thread_cond_t *cond,
+        apr_thread_mutex_t *mutex, const char *func, const char *file, int line)
 {
     apr_status_t rv;
 
+    obwdg_released(mutex);
     rv = pthread_cond_wait(&cond->cond, &mutex->mutex);
+    obwdg_acquired(mutex);
 #ifdef HAVE_ZOS_PTHREADS
     if (rv) {
         rv = errno;
@@ -74,13 +83,15 @@ APR_DECLARE(apr_status_t) apr_thread_cond_wait(apr_thread_cond_t *cond,
     return rv;
 }
 
-APR_DECLARE(apr_status_t) apr_thread_cond_timedwait(apr_thread_cond_t *cond,
-                                                    apr_thread_mutex_t *mutex,
-                                                    apr_interval_time_t timeout)
+APR_DECLARE(apr_status_t) __apr_thread_cond_timedwait(apr_thread_cond_t *cond,
+        apr_thread_mutex_t *mutex, apr_interval_time_t timeout,
+        const char *func, const char *file, int line)
 {
     apr_status_t rv;
     if (timeout < 0) {
+        obwdg_released(mutex);
         rv = pthread_cond_wait(&cond->cond, &mutex->mutex);
+        obwdg_acquired(mutex);
 #ifdef HAVE_ZOS_PTHREADS
         if (rv) {
             rv = errno;
@@ -95,7 +106,9 @@ APR_DECLARE(apr_status_t) apr_thread_cond_timedwait(apr_thread_cond_t *cond,
         abstime.tv_sec = apr_time_sec(then);
         abstime.tv_nsec = apr_time_usec(then) * 1000; /* nanoseconds */
 
+        obwdg_released(mutex);
         rv = pthread_cond_timedwait(&cond->cond, &mutex->mutex, &abstime);
+        obwdg_acquired(mutex);
 #ifdef HAVE_ZOS_PTHREADS
         if (rv) {
             rv = errno;

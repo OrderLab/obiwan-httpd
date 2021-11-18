@@ -50,6 +50,7 @@
 #endif
 
 #include <unistd.h>
+#define INJECT_WAIT 0
 
 APLOG_USE_MODULE(http);
 
@@ -446,9 +447,11 @@ void ap_process_async_request(request_rec *r)
 #if APR_HAS_THREADS
     apr_thread_mutex_create(&r->invoke_mtx, APR_THREAD_MUTEX_DEFAULT, r->pool);
     apr_thread_mutex_lock(r->invoke_mtx);
+#if INJECT_WAIT
     fprintf(stderr, "orbit: http request locked, to sleep\n");
     sleep(25);
     fprintf(stderr, "orbit: http request slept 25s\n");
+#endif
 #endif
     access_status = ap_run_quick_handler(r, 0);  /* Not a look-up request */
     if (access_status == DECLINED) {
@@ -470,13 +473,17 @@ void ap_process_async_request(request_rec *r)
             c->cs->state = CONN_STATE_SUSPENDED;
 #if APR_HAS_THREADS
         apr_thread_mutex_unlock(r->invoke_mtx);
+#if INJECT_WAIT
         fprintf(stderr, "orbit: http request unlocked 1\n");
+#endif
 #endif
         return;
     }
 #if APR_HAS_THREADS
     apr_thread_mutex_unlock(r->invoke_mtx);
+#if INJECT_WAIT
     fprintf(stderr, "orbit: http request unlocked 2\n");
+#endif
 #endif
 
     ap_die_r(access_status, r, HTTP_OK);

@@ -51,6 +51,15 @@ typedef struct apr_thread_mutex_t apr_thread_mutex_t;
 
 #define HAS_ORBIT 1
 
+#if HAS_ORBIT
+struct call_site {
+    const char *func;
+    const char *file;
+    int line;
+};
+extern const struct call_site unknown_loc;
+#endif
+
 /**
  * Create and initialize a mutex that can be used to synchronize threads.
  * @param mutex the memory address where the newly created mutex will be
@@ -72,15 +81,16 @@ APR_DECLARE(apr_status_t) apr_thread_mutex_create(apr_thread_mutex_t **mutex,
                                                   apr_pool_t *pool);
 #else
 APR_DECLARE(apr_status_t) __apr_thread_mutex_create(apr_thread_mutex_t **mutex,
-        unsigned int flags, apr_pool_t *pool,
-        const char *func, const char *file, int line);
+        unsigned int flags, apr_pool_t *pool, const struct call_site *loc);
 static inline APR_DECLARE(apr_status_t) apr_thread_mutex_create(
         apr_thread_mutex_t **mutex, unsigned int flags, apr_pool_t *pool)
 {
-    return __apr_thread_mutex_create(mutex, flags, pool, "unknown", "unknown", 0);
+    return __apr_thread_mutex_create(mutex, flags, pool, &unknown_loc);
 }
-#define apr_thread_mutex_create(mutex, flags, pool) \
-    __apr_thread_mutex_create(mutex, flags, pool, __func__, __FILE__, __LINE__)
+#define apr_thread_mutex_create(mutex, flags, pool) ({ \
+        static const struct call_site loc = { __func__, __FILE__, __LINE__, }; \
+        __apr_thread_mutex_create(mutex, flags, pool, &loc); \
+    })
 #endif
 /**
  * Acquire the lock for the given mutex. If the mutex is already locked,
@@ -91,14 +101,16 @@ static inline APR_DECLARE(apr_status_t) apr_thread_mutex_create(
 APR_DECLARE(apr_status_t) apr_thread_mutex_lock(apr_thread_mutex_t *mutex);
 #else
 APR_DECLARE(apr_status_t) __apr_thread_mutex_lock(apr_thread_mutex_t *mutex,
-        const char *func, const char *file, int line);
+        const struct call_site *loc);
 static inline APR_DECLARE(apr_status_t)
 apr_thread_mutex_lock(apr_thread_mutex_t *mutex)
 {
-    return __apr_thread_mutex_lock(mutex, "unknown", "unknown", 0);
+    return __apr_thread_mutex_lock(mutex, &unknown_loc);
 }
-#define apr_thread_mutex_lock(mutex) \
-    __apr_thread_mutex_lock(mutex, __func__, __FILE__, __LINE__)
+#define apr_thread_mutex_lock(mutex) ({ \
+        static const struct call_site loc = { __func__, __FILE__, __LINE__, }; \
+        __apr_thread_mutex_lock(mutex, &loc); \
+    })
 #endif
 
 /**
@@ -112,14 +124,16 @@ apr_thread_mutex_lock(apr_thread_mutex_t *mutex)
 APR_DECLARE(apr_status_t) apr_thread_mutex_trylock(apr_thread_mutex_t *mutex);
 #else
 APR_DECLARE(apr_status_t) __apr_thread_mutex_trylock(apr_thread_mutex_t *mutex,
-        const char *func, const char *file, int line);
+        const struct call_site *loc);
 static inline APR_DECLARE(apr_status_t)
 apr_thread_mutex_trylock(apr_thread_mutex_t *mutex)
 {
-    return __apr_thread_mutex_trylock(mutex, "unknown", "unknown", 0);
+    return __apr_thread_mutex_trylock(mutex, &unknown_loc);
 }
-#define apr_thread_mutex_trylock(mutex) \
-    __apr_thread_mutex_trylock(mutex, __func__, __FILE__, __LINE__)
+#define apr_thread_mutex_trylock(mutex) ({ \
+        static const struct call_site loc = { __func__, __FILE__, __LINE__, }; \
+        __apr_thread_mutex_trylock(mutex, &loc); \
+    })
 #endif
 
 /**
@@ -135,15 +149,16 @@ APR_DECLARE(apr_status_t) apr_thread_mutex_timedlock(apr_thread_mutex_t *mutex,
                                                  apr_interval_time_t timeout);
 #else
 APR_DECLARE(apr_status_t) __apr_thread_mutex_timedlock(apr_thread_mutex_t *mutex,
-        apr_interval_time_t timeout,
-        const char *func, const char *file, int line);
+        apr_interval_time_t timeout, const struct call_site *loc);
 static inline APR_DECLARE(apr_status_t)
 apr_thread_mutex_timedlock(apr_thread_mutex_t *mutex, apr_interval_time_t timeout)
 {
-    return __apr_thread_mutex_timedlock(mutex, timeout, "unknown", "unknown", 0);
+    return __apr_thread_mutex_timedlock(mutex, timeout, &unknown_loc);
 }
-#define apr_thread_mutex_timedlock(mutex, timeout) \
-    __apr_thread_mutex_timedlock(mutex, timeout, __func__, __FILE__, __LINE__)
+#define apr_thread_mutex_timedlock(mutex, timeout) ({ \
+        static const struct call_site loc = { __func__, __FILE__, __LINE__, }; \
+        __apr_thread_mutex_timedlock(mutex, timeout, &loc); \
+    })
 #endif
 
 /**
@@ -154,14 +169,17 @@ apr_thread_mutex_timedlock(apr_thread_mutex_t *mutex, apr_interval_time_t timeou
 APR_DECLARE(apr_status_t) apr_thread_mutex_unlock(apr_thread_mutex_t *mutex);
 #else
 APR_DECLARE(apr_status_t) __apr_thread_mutex_unlock(apr_thread_mutex_t *mutex,
-        const char *func, const char *file, int line);
+        const struct call_site *loc);
 static inline APR_DECLARE(apr_status_t)
 apr_thread_mutex_unlock(apr_thread_mutex_t *mutex)
 {
-    return __apr_thread_mutex_unlock(mutex, "unknown", "unknown", 0);
+    return __apr_thread_mutex_unlock(mutex, &unknown_loc);
 }
-#define apr_thread_mutex_unlock(mutex) \
-    __apr_thread_mutex_unlock(mutex, __func__, __FILE__, __LINE__)
+#define apr_thread_mutex_unlock(mutex) ({ \
+        static const struct call_site loc = { __func__, __FILE__, __LINE__, }; \
+        __apr_thread_mutex_unlock(mutex, &loc); \
+    })
+
 #endif
 
 /**
@@ -172,14 +190,16 @@ apr_thread_mutex_unlock(apr_thread_mutex_t *mutex)
 APR_DECLARE(apr_status_t) apr_thread_mutex_destroy(apr_thread_mutex_t *mutex);
 #else
 APR_DECLARE(apr_status_t) __apr_thread_mutex_destroy(apr_thread_mutex_t *mutex,
-        const char *func, const char *file, int line);
+        const struct call_site *loc);
 static inline APR_DECLARE(apr_status_t)
 apr_thread_mutex_destroy(apr_thread_mutex_t *mutex)
 {
-    return __apr_thread_mutex_destroy(mutex, "unknown", "unknown", 0);
+    return __apr_thread_mutex_destroy(mutex, &unknown_loc);
 }
-#define apr_thread_mutex_destroy(mutex) \
-    __apr_thread_mutex_destroy(mutex, __func__, __FILE__, __LINE__)
+#define apr_thread_mutex_destroy(mutex) ({ \
+        static const struct call_site loc = { __func__, __FILE__, __LINE__, }; \
+        __apr_thread_mutex_destroy(mutex, &loc); \
+    })
 #endif
 
 /**
@@ -187,6 +207,11 @@ apr_thread_mutex_destroy(apr_thread_mutex_t *mutex)
  * @return apr_pool_t the pool
  */
 APR_POOL_DECLARE_ACCESSOR(thread_mutex);
+
+#if HAS_ORBIT && !defined(DOXYGEN)
+void grab_counter_slot(void);
+void release_counter_slot(void);
+#endif
 
 #undef HAS_ORBIT
 

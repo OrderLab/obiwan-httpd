@@ -81,14 +81,16 @@ APR_DECLARE(apr_status_t) apr_thread_cond_wait(apr_thread_cond_t *cond,
                                                apr_thread_mutex_t *mutex);
 #else
 APR_DECLARE(apr_status_t) __apr_thread_cond_wait(apr_thread_cond_t *cond,
-        apr_thread_mutex_t *mutex, const char *func, const char *file, int line);
+        apr_thread_mutex_t *mutex, const struct call_site *loc);
 static inline APR_DECLARE(apr_status_t)
 apr_thread_cond_wait(apr_thread_cond_t *cond, apr_thread_mutex_t *mutex)
 {
-    return __apr_thread_cond_wait(cond, mutex, "unknown", "unknown", 0);
+    return __apr_thread_cond_wait(cond, mutex, &unknown_loc);
 }
-#define apr_thread_cond_wait(cond, mutex) \
-    __apr_thread_cond_wait(cond, mutex, __func__, __FILE__, __LINE__)
+#define apr_thread_cond_wait(cond, mutex) ({ \
+        static const struct call_site loc = { __func__, __FILE__, __LINE__, }; \
+        __apr_thread_cond_wait(cond, mutex, &loc); \
+    })
 #endif
 
 /**
@@ -114,15 +116,17 @@ APR_DECLARE(apr_status_t) apr_thread_cond_timedwait(apr_thread_cond_t *cond,
 #else
 APR_DECLARE(apr_status_t) __apr_thread_cond_timedwait(apr_thread_cond_t *cond,
         apr_thread_mutex_t *mutex, apr_interval_time_t timeout,
-        const char *func, const char *file, int line);
+        const struct call_site *loc);
 static inline APR_DECLARE(apr_status_t)
 apr_thread_cond_timedwait(apr_thread_cond_t *cond,
         apr_thread_mutex_t *mutex, apr_interval_time_t timeout)
 {
-    return __apr_thread_cond_timedwait(cond, mutex, timeout, "unknown", "unknown", 0);
+    return __apr_thread_cond_timedwait(cond, mutex, timeout, &unknown_loc);
 }
-#define apr_thread_cond_timedwait(cond, mutex, timeout) \
-    __apr_thread_cond_timedwait(cond, mutex, timeout, __func__, __FILE__, __LINE__)
+#define apr_thread_cond_timedwait(cond, mutex, timeout) ({ \
+        static const struct call_site loc = { __func__, __FILE__, __LINE__, }; \
+        __apr_thread_cond_timedwait(cond, mutex, timeout, &loc); \
+    })
 #endif
 
 /**

@@ -139,6 +139,7 @@ APR_DECLARE(apr_status_t) apr_threadattr_guardsize_set(apr_threadattr_t *attr,
 static void *dummy_worker(void *opaque)
 {
     apr_thread_t *thread = (apr_thread_t*)opaque;
+    grab_counter_slot();
     return thread->func(thread, thread->data);
 }
 
@@ -204,6 +205,7 @@ APR_DECLARE(apr_status_t) apr_thread_exit(apr_thread_t *thd,
 {
     thd->exitval = retval;
     apr_pool_destroy(thd->pool);
+    release_counter_slot();
     pthread_exit(NULL);
     return APR_SUCCESS;
 }

@@ -490,9 +490,9 @@ int main(int argc, const char * const argv[])
 
     AP_MONCONTROL(0); /* turn off profiling of startup */
 
-    obpool = orbit_pool_create(1024 * 1024);
+    obpool = orbit_pool_create(NULL, 1024 * 1024);
     oballoc = orbit_allocator_from_pool(obpool, true);
-    scratchpool = orbit_pool_create(1024 * 1024);
+    scratchpool = orbit_pool_create(NULL, 1024 * 1024);
     orbit_scratch_set_pool(scratchpool);
 
     process = init_process(&argc, &argv);

@@ -1257,35 +1257,72 @@ AP_DECLARE(void) ap_get_mime_headers(request_rec *r)
     apr_brigade_destroy(tmp_bb);
 }
 
+#define OBPOOLS 16
 extern struct orbit_allocator *oballoc;
-static struct orbit_pool *obpools[16];
-static int obpools_cursor = 0;
+static struct orbit_pool *obpools[OBPOOLS];
+static bool used[OBPOOLS];
+//static int obpools_cursor = 0;
 static pthread_spinlock_t oblock;
 static int inited = 0;
+
+static void dump_used(void) {
+    int i;
+    return;
+    fprintf(stderr, "used: ");
+    for (i = 0; i < OBPOOLS; ++i) {
+        fprintf(stderr, "%d ", used[i]);
+    }
+    fprintf(stderr, "\n");
+}
 
 /* TODO: create pool dynamically? */
 struct orbit_allocator *get_oballoc(void)
 {
-	int i;
-	struct orbit_allocator *alloc;
+    int i;
+    struct orbit_allocator *alloc;
 
-    if (!inited) pthread_spin_init(&oblock, PTHREAD_PROCESS_PRIVATE);
-	pthread_spin_lock(&oblock);
-	if (!obpools[0]) {
-		for (i = 0; i < 16; ++i)
-			obpools[i] = orbit_pool_create(1024 * 1024);
-	}
-	alloc = orbit_allocator_from_pool(obpools[obpools_cursor++], false);
-	if (obpools_cursor == 16) obpools_cursor = 0;
-	pthread_spin_unlock(&oblock);
-	return alloc;
+    if (!inited) {
+        inited = 1;
+        pthread_spin_init(&oblock, PTHREAD_PROCESS_PRIVATE);
+        for (i = 0; i < OBPOOLS; ++i)
+            obpools[i] = orbit_pool_create(NULL, 1024 * 1024);
+    }
+    pthread_spin_lock(&oblock);
+    dump_used();
+    for (i = 0; i < OBPOOLS; ++i)
+        if (!used[i]) break;
+    dump_used();
+    if (i == OBPOOLS) {
+        fprintf(stderr, "orbit: all pool used!\n");
+        abort();
+    }
+    alloc = orbit_allocator_from_pool(obpools[i], false);
+    used[i] = true;
+    //if (obpools_cursor == 16) { obpools_cursor = 0; fprintf(stderr, "orbit: obpool cursor back\n"); };
+    pthread_spin_unlock(&oblock);
+    return alloc;
 }
 
 apr_status_t oballoc_cleanup(void *alloc_)
 {
+    int i;
     struct orbit_allocator *alloc = (struct orbit_allocator*)alloc_;
+    //fprintf(stderr, "orbit: before oballoc cleanup\n");
+    pthread_spin_lock(&oblock);
+    dump_used();
     *alloc->allocated = 0;
+    for (i = 0; i < OBPOOLS; ++i) {
+        if (&obpools[i]->used == alloc->allocated) {
+            used[i] = false;
+            break;
+        }
+    }
+    dump_used();
+    if (i == OBPOOLS) {
+        fprintf(stderr, "orbit: pool not found!\n");
+    }
     orbit_allocator_destroy(alloc);
+    pthread_spin_unlock(&oblock);
     return APR_SUCCESS;
 }
 
@@ -1298,14 +1335,15 @@ request_rec *ap_read_request(conn_rec *conn)
     apr_bucket_brigade *tmp_bb;
     apr_socket_t *csd;
     apr_interval_time_t cur_timeout;
-
+    struct orbit_allocator *oballoc = get_oballoc();
 
     apr_pool_create(&p, conn->pool);
     apr_pool_tag(p, "request");
-    r = apr_pcalloc(p, sizeof(request_rec));
+    //r = apr_pcalloc(p, sizeof(request_rec));
+    r = orbit_calloc(oballoc, sizeof(request_rec));
     AP_READ_REQUEST_ENTRY((intptr_t)r, (uintptr_t)conn);
     r->pool            = p;
-    r->oballoc         = get_oballoc();
+    r->oballoc         = oballoc;
     apr_pool_cleanup_register(r->pool, r->oballoc, oballoc_cleanup, NULL);
     r->connection      = conn;
     r->server          = conn->base_server;

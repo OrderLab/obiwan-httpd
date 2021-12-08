@@ -26,12 +26,20 @@
 #include "mod_watchdog.h"
 
 #include "orbit.h"
+#include <assert.h>
 
 #if 0
 #define obprint(format, ...) fprintf(stderr, format, ##__VA_ARGS__)
 #else
 #define obprint(format, ...) do {} while (0)
 #endif
+
+void dump_mem(void *ptr, size_t size, char *filename) {
+    //return;
+    FILE *f = fopen(filename, "w");
+    fwrite(ptr, 1, size, f);
+    fclose(f);
+}
 
 static const char *balancer_mutex_type = "proxy-balancer-shm";
 ap_slotmem_provider_t *storage = NULL;
@@ -474,10 +482,9 @@ static int rewrite_url(request_rec *r, proxy_worker *worker,
     name_len = worker->s->name ? strlen(worker->s->name) : 0;
     path_len = path ? strlen(path) : 0;
 
-    int ret = orbit_scratch_push_any(s, NULL, name_len + path_len + 1);
-    obprint("ret = %d\n", ret);
-    // FIXME: this is ugly, we should return the repr directly
-    *url = ((struct orbit_repr*)s->ptr)->any.data;
+    dump_mem(s->ptr, 4096, "/tmp/orbit0.bin");
+    *url = (char*)orbit_scratch_push_any(s, NULL, name_len + path_len + 1);
+    dump_mem(s->ptr, 4096, "/tmp/orbit1.bin");
     obprint("url = %p, worker = %p\n", *url, worker);
     if (name_len) memcpy(*url, worker->s->name, name_len);
     if (path_len) memcpy(*url + name_len, path, path_len);
@@ -661,6 +668,7 @@ static int proxy_balancer_pre_request_inner(proxy_worker **worker,
                       (*balancer)->s->name);
     } */
 #endif
+// #define apr_table_setn(t, key, val) do { } while (0)
 #define apr_table_setn(t, key, val) do { \
         unsigned long args[] = { (unsigned long)(t), (unsigned long)(key), (unsigned long)(val) }; \
         orbit_scratch_push_operation(s, apr_table_setn_orbit, 3, args); \
@@ -695,7 +703,7 @@ static int proxy_balancer_pre_request_inner(proxy_worker **worker,
         *worker = runtime;
     }
 
-    obprint("pre_request alive 6\n");
+    obprint("pre_request alive 6, worker=%p\n", worker);
     (*worker)->s->busy++;
 
     /* apr_pool_cleanup_register(r->pool, *worker, decrement_busy_count,
@@ -703,6 +711,7 @@ static int proxy_balancer_pre_request_inner(proxy_worker **worker,
     unsigned long args[] = { (unsigned long)r->pool, (unsigned long)*worker,
             (unsigned long)decrement_busy_count, (unsigned long)apr_pool_cleanup_null };
     orbit_scratch_push_operation(s, apr_pool_cleanup_register_orbit, 4, args);
+    obprint("pre_request alive 7\n");
 
     /* Add balancer/worker info to env. */
     apr_table_setn(r->subprocess_env,
@@ -717,7 +726,9 @@ static int proxy_balancer_pre_request_inner(proxy_worker **worker,
      * This replaces the balancers fictional name with the
      * real hostname of the elected worker.
      */
+    obprint("pre_request alive 8\n");
     access_status = rewrite_url(r, *worker, url, s);
+    obprint("pre_request alive 9\n");
     /* Add the session route to request notes if present */
 #undef apr_table_setn
 // FIXME: we need to allocate route at some where and send it back
@@ -732,47 +743,58 @@ static int proxy_balancer_pre_request_inner(proxy_worker **worker,
         apr_table_setn(r->subprocess_env,
                        "BALANCER_SESSION_ROUTE", route);
     }
+    obprint("pre_request alive 10\n");
     ap_log_rerror(APLOG_MARK, APLOG_DEBUG, 0, r, APLOGNO(01172)
                   "%s: worker (%s) rewritten to %s",
                   (*balancer)->s->name, (*worker)->s->name, *url);
+    obprint("pre_request alive 11\n");
 
     return access_status;
 }
 #undef apr_table_setn
 
 struct ob_lb_args {
-    // proxy_worker **worker;
     proxy_worker *worker;
-    // proxy_balancer **balancer;
     proxy_balancer *balancer;
     request_rec *r;
     proxy_server_conf *conf;
-    // char **url;
     char *url;
+};
+
+struct ob_lb_ret {
+    proxy_worker *worker;
+    proxy_balancer *balancer;
+    char *url;
+    int retval;
 };
 
 /* FIXME: arg passing and returns */
 static unsigned long proxy_balancer_pre_request_orbit(void *store, void *argptr)
 {
     (void)store;
-    struct ob_lb_args *args =
-            *(struct ob_lb_args**)argptr;
+    struct ob_lb_args *args = (struct ob_lb_args*)argptr;
+    struct ob_lb_ret obret = { args->worker, args->balancer, args->url, }, *retptr;
     struct orbit_scratch s;
 
     int ret = orbit_scratch_create(&s);
-    obprint("ret = %d\n", ret);
+    obprint("orbit_scratch_create ret = %d\n", ret);
 
-    ret = proxy_balancer_pre_request_inner(
-        &args->worker, &args->balancer, args->r, args->conf, &args->url, &s);
-    obprint("pre_request orbit ret = %d\n", ret);
+    obret.retval = proxy_balancer_pre_request_inner(
+        &obret.worker, &obret.balancer, args->r, args->conf, &obret.url, &s);
+    obprint("pre_request orbit ret = %d\n", obret.retval);
     obprint("pre_request orbit worker = %p\n", args->worker);
     obprint("pre_request orbit balancer = %p\n", args->balancer);
     obprint("pre_request orbit url = %p %s\n", args->url, args->url);
-    orbit_commit();
+
+    retptr = orbit_scratch_push_any(&s, &obret, sizeof(obret));
+
+    dump_mem(s.ptr, 4096, "/tmp/orbit.bin");
+    obprint("pre_request orbit before send empty=%d\n", orbit_scratch_empty(&s));
     if (!orbit_scratch_empty(&s))
         orbit_sendv(&s);
+    obprint("pre_request orbit after send\n");
     // FIXME: this won't work on 32-bit system
-    return (unsigned long)(unsigned int)ret;
+    return (unsigned long)retptr;
 }
 
 extern struct orbit_pool *obpool;
@@ -789,15 +811,12 @@ static int proxy_balancer_pre_request(proxy_worker **worker,
                                       proxy_server_conf *conf, char **url)
 {
     int ret;
-    struct ob_lb_args *args;
     struct orbit_task task;
     union orbit_result result;
-    char *url_dup;
+    char *url_dup = strcpy(orbit_alloc(r->oballoc, strlen(*url) + 1), *url);
+    struct ob_lb_args args = { *worker, *balancer, r, conf, url_dup };
 
-    args = (struct ob_lb_args*)orbit_alloc(r->oballoc, sizeof(struct ob_lb_args));
-
-    url_dup = strcpy(orbit_alloc(r->oballoc, strlen(*url) + 1), *url);
-    *args = (struct ob_lb_args){ *worker, *balancer, r, conf, url_dup };
+    assert(url_dup != NULL);
 
     static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
     pthread_mutex_lock(&m);
@@ -806,18 +825,17 @@ static int proxy_balancer_pre_request(proxy_worker **worker,
     static bool last_error = false;
     if (!ob || last_error) ob = orbit_create("balancer", proxy_balancer_pre_request_orbit, NULL);
 
-    fprintf(stderr, "obpool size %lu\n", obpool->used);
+    obprint(stderr, "obpool size %lu\n", obpool->used);
 
     struct orbit_pool *pools[] = { obpool, to_pool(r->oballoc), };
     ret = orbit_call_async(ob, 0, 2, pools, NULL, &args, sizeof(args), &task);
+    obprint("pre_request after obcall\n");
     while ((ret = orbit_recvv(&result, &task)) > 0) {
+        dump_mem(result.scratch.ptr, 4096, "/tmp/main.bin");
+        obprint("within one receive before apply\n");
         orbit_apply(&result.scratch, false);
+        obprint("after one apply\n");
     }
-
-    obprint("pre_request ret = %d\n", ret);
-    obprint("pre_request worker = %p\n", args->worker);
-    obprint("pre_request balancer = %p\n", args->balancer);
-    obprint("pre_request url = %p %s\n", args->url, args->url);
 
     if (ret < 0) {
         ret = HTTP_SERVICE_UNAVAILABLE;
@@ -826,12 +844,20 @@ static int proxy_balancer_pre_request(proxy_worker **worker,
         last_error = true;
         sleep(1);
     } else {
-        *worker = args->worker;
-        *balancer = args->balancer;
-        if (args->url)
-            *url = apr_pstrdup(r->pool, args->url);
-        obprint("pre_request result.retval = %d\n", (int)result.retval);
-        ret = result.retval;
+        struct ob_lb_ret *retptr = (struct ob_lb_ret *)result.retval;
+
+        obprint("pre_request retptr = %p\n", retptr);
+        obprint("pre_request worker = %p\n", retptr->worker);
+        obprint("pre_request balancer = %p\n", retptr->balancer);
+        obprint("pre_request url = %p %s\n", retptr->url, retptr->url);
+
+        *worker = retptr->worker;
+        *balancer = retptr->balancer;
+        if (retptr->url)
+            *url = apr_pstrdup(r->pool, retptr->url);
+        //orbit_free(r->oballoc, url_dup);
+        ret = retptr->retval;
+        obprint("pre_request result.retval = %d\n", ret);
         last_error = false;
     }
 

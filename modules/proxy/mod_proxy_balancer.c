@@ -34,12 +34,15 @@
 #define obprint(format, ...) do {} while (0)
 #endif
 
+#if 0
 void dump_mem(void *ptr, size_t size, char *filename) {
-    //return;
     FILE *f = fopen(filename, "w");
     fwrite(ptr, 1, size, f);
     fclose(f);
 }
+#else
+#define dump_mem(a,b,c) do {} while (0)
+#endif
 
 static const char *balancer_mutex_type = "proxy-balancer-shm";
 ap_slotmem_provider_t *storage = NULL;
@@ -842,7 +845,7 @@ static int proxy_balancer_pre_request(proxy_worker **worker,
         // FIXME: orbit_state derefs arbitrary pointer in kernel
         // while (orbit_exists(ob)) ;{
         last_error = true;
-        sleep(1);
+        // sleep(1);
     } else {
         struct ob_lb_ret *retptr = (struct ob_lb_ret *)result.retval;
 

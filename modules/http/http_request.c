@@ -50,7 +50,7 @@
 #endif
 
 #include <unistd.h>
-#define INJECT_WAIT 0
+#define INJECT_WAIT 1
 
 APLOG_USE_MODULE(http);
 

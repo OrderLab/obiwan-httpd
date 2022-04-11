@@ -30,8 +30,8 @@
 // FIXME: using a fixed size slots and expensive traverse just for PoC
 #define NSLOTS 1024
 #define OBWDG_INTERVAL 1
-#define OBWDG_TIMEOUT 60
-// #define OBWDG_TIMEOUT 10
+//#define OBWDG_TIMEOUT 60
+#define OBWDG_TIMEOUT 10
 
 #if 0
 #define obprintf(fmt, ...) do { \
@@ -244,6 +244,7 @@ static void *obwdg_create_store(void) {
 struct obwdg_entry_args {
     struct ob_watchdog_counter_slot *counter_slots;
     size_t counter_slot_used;
+    bool inject;
 };
 
 struct obwdg_diagnosis_args {
@@ -278,6 +279,9 @@ static unsigned long obwdg_entry(void *store_, void *argbuf) {
     struct obwdg_entry_args *args = (struct obwdg_entry_args*)argbuf;
     int next_check = 0;
     int ret;
+
+    if (args->inject)
+        abort();
 
     struct orbit_scratch scratch;
     ret = orbit_scratch_create(&scratch);
@@ -382,10 +386,20 @@ static void *obwdg_bg_loop(void *aux) {
             ret = orbit_call_async(obwdg, 0, 1, &obwdg_info_pool,
                 obwdg_diagnosis, &args, sizeof(args), &task);
         } else {
+            static bool do_inject = false;
+            static int inject_counter = 0;
+            bool inject = (do_inject && ++inject_counter % 10 == 0);
+            if (do_inject) {
+                static FILE *f = NULL;
+                if (f == NULL) f = fopen("/tmp/wt.txt", "w");
+                fprintf(f, "inject=%d, counter=%d\n", inject, inject_counter);
+                fflush(f);
+            }
             /* normal check */
             struct obwdg_entry_args args = {
                 .counter_slots = obwdg_counter_slots,
                 .counter_slot_used = NSLOTS,
+                .inject = inject,
             };
             ret = orbit_call_async(obwdg, 0, 1, &obwdg_counter_pool,
                 obwdg_entry, &args, sizeof(args), &task);
@@ -399,16 +413,21 @@ static void *obwdg_bg_loop(void *aux) {
 
         /* Apply set to all counters */
         ret = orbit_recvv(&result, &task);
-        assert(ret == 1);
+        if (ret != 1) goto fail;
         orbit_apply(&result.scratch, false);
 
         /* Receive return value to determine whether we need a diagnosis run */
         ret = orbit_recvv(&result, &task);
-        assert(ret == 0);
+        if (ret != 0) goto fail;
         assert(result.retval == 0 || result.retval == 1);
         check_type = result.retval;
         if (check_type == 0)
             sleep(1);
+        continue;
+fail:
+        obwdg = orbit_create("ob mutex watchdog", obwdg_entry, obwdg_create_store);
+        check_type = 0;
+        sleep(1);
     }
 }
 
